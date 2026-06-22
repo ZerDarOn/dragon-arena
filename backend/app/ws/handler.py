@@ -48,16 +48,18 @@ def _log_event(gs: RoomGameState, actor: str, action: str, **kwargs):
     ))
 
 
-async def handle_ws_connection(websocket: WebSocket, room_id: str, player_id: str,
-                                nickname: str, room_service: RoomService):
+async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
+                                nickname: str, room_service: RoomService, user=None):
     room = room_service.get_room(room_id)
     if not room:
         await websocket.close(code=4004, reason="room not found")
         return
+    # Player.id == User.id for simplicity
+    player_id = user_id
     await connection_mgr.connect(room_id, player_id, websocket)
     if player_id not in room.players:
         room.players[player_id] = Player(
-            id=player_id, name=player_id, nickname=nickname,
+            id=player_id, name=nickname or player_id, nickname=nickname,
             is_host=False, is_connected=True,
         )
     room.players[player_id].is_connected = True
