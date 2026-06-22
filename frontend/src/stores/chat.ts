@@ -8,10 +8,14 @@ export const useChatStore = defineStore('chat', () => {
   const battle = ref<ChatMessage[]>([])
   const privateChats = ref<Record<string, ChatMessage[]>>({})
   const inbox = ref<ChatMessage[]>([])
+  const campaignHall = ref<ChatMessage[]>([])
+  const warHall = ref<ChatMessage[]>([])
 
   function addMessage(msg: ChatMessage) {
     const self = useSelfStore()
     if (msg.channel === 'hall') hall.value.push(msg)
+    else if (msg.channel === 'campaign_hall') campaignHall.value.push(msg)
+    else if (msg.channel === 'war_hall') warHall.value.push(msg)
     else if (msg.channel === 'battle') battle.value.push(msg)
     else if (msg.channel === 'private') {
       const other = msg.sender_id === self.playerId
@@ -20,5 +24,5 @@ export const useChatStore = defineStore('chat', () => {
       ;(privateChats.value[other] ||= []).push(msg)
     } else if (msg.channel.startsWith('spatial')) inbox.value.push(msg)
   }
-  return { hall, battle, privateChats, inbox, addMessage }
+  return { hall, battle, privateChats, inbox, campaignHall, warHall, addMessage }
 })

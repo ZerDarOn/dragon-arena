@@ -1,12 +1,13 @@
 <template>
-  <div class="game-view">
+  <div class="battle-view">
     <header class="top-bar">
       <span class="room-name">{{ room.room.value?.name ?? '...' }}</span>
       <span class="turn-info" v-if="room.room.value">
         大回合 {{ room.room.value.big_turn }} · 子回合 {{ room.room.value.sub_turn }}
       </span>
-      <button v-if="room.room.value && !room.room.value.current_actor && self.isHost"
+      <button v-if="room.room.value && !room.room.value.current_actor && auth.isAdmin"
               @click="startGame">开始游戏</button>
+      <button @click="leave">离开战役</button>
     </header>
 
     <div class="main">
@@ -19,7 +20,7 @@
       </aside>
 
       <section class="board-area">
-        <DMConsole v-if="self.isHost" ref="dmRef" />
+        <DMConsole v-if="auth.isAdmin" ref="dmRef" />
         <div class="canvas-wrap">
           <GameCanvas v-if="room.room.value"
                       :room="room.room.value"
@@ -31,7 +32,7 @@
       </section>
 
       <aside class="right-panel">
-        <ChatPanel />
+        <ChatPanel :channels="['hall', 'private', 'campaign_hall', 'spatial', 'war_hall']" />
       </aside>
     </div>
   </div>
@@ -39,10 +40,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useRoomStore } from '../stores/room'
 import { useSelfStore } from '../stores/self'
 import { useChatStore } from '../stores/chat'
+import { useAuthStore } from '../stores/auth'
 import { WSClient, type ServerMessage } from '../api/ws'
 import GameCanvas from '../components/board/GameCanvas.vue'
 import PlayerList from '../components/sidebar/PlayerList.vue'
@@ -54,9 +56,11 @@ import ChatPanel from '../components/chat/ChatPanel.vue'
 import DMConsole from '../components/layout/DMConsole.vue'
 
 const route = useRoute()
+const router = useRouter()
 const room = useRoomStore()
 const self = useSelfStore()
 const chat = useChatStore()
+const auth = useAuthStore()
 const dmRef = ref<InstanceType<typeof DMConsole> | null>(null)
 
 const ws = new WSClient()
@@ -68,16 +72,14 @@ const selfTokenId = computed(() => {
 })
 
 /**
- * 计算当前玩家可见格子集合。
- * MVP 阶段：地图数据尚未随 state_sync 下发，
- *  - 团长：上帝视角（返回 undefined = 全可见）
- *  - 玩家：以自身位置为中心的切比雪夫半径圆形
- * 后续 V1 版本接入真实 vision_service 后替换为扇形+射线遮挡。
+ * Compute visible cells for current player.
+ * MVP: host = omniscient; player = chebyshev radius around own token.
+ * V1: replace with real vision_service (sector + raycast + fog).
  */
 const visibleCells = computed<Set<string> | undefined>(() => {
   const r = room.room.value
   if (!r) return undefined
-  if (self.isHost) return undefined
+  if (auth.isAdmin) return undefined
   const tid = selfTokenId.value
   if (!tid) return new Set<string>()
   const me = r.tokens[tid]
@@ -106,6 +108,10 @@ function startGame() {
   ws.send({ type: 'start_game', payload: {} })
 }
 
+function leave() {
+  router.push('/workbench')
+}
+
 function dispatchMessage(msg: ServerMessage) {
   if (msg.type === 'state_sync') {
     room.setState(msg.payload)
@@ -120,9 +126,10 @@ function dispatchMessage(msg: ServerMessage) {
 
 onMounted(() => {
   const roomId = String(route.params.roomId)
-  const pid = self.playerId || crypto.randomUUID()
-  const nick = self.nickname || `玩家${pid.slice(0, 4)}`
-  self.init(pid, nick)
+  if (!auth.token) {
+    router.push('/login')
+    return
+  }
 
   wsSendHandler = (e: Event) => {
     const detail = (e as CustomEvent).detail
@@ -131,7 +138,7 @@ onMounted(() => {
   window.addEventListener('ws-send', wsSendHandler)
 
   ws.onMessage(dispatchMessage)
-  ws.connect(roomId, pid, nick)
+  ws.connect(roomId, auth.token)
 })
 
 onUnmounted(() => {
@@ -141,7 +148,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.game-view { display: flex; flex-direction: column; height: 100vh; overflow: hidden; font-family: sans-serif; }
+.battle-view { display: flex; flex-direction: column; height: 100vh; overflow: hidden; font-family: sans-serif; }
 .top-bar { display: flex; align-items: center; gap: 16px; padding: 8px 12px; background: #222; color: #eee; }
 .top-bar .room-name { font-weight: bold; }
 .main { display: grid; grid-template-columns: 240px 1fr 320px; flex: 1; min-height: 0; }
@@ -151,7 +158,6 @@ onUnmounted(() => {
 .right-panel { border-left: 1px solid #ccc; min-height: 0; }
 button { padding: 4px 10px; cursor: pointer; }
 
-/* 移动端兼容：窄屏改为单列堆叠 */
 @media (max-width: 900px) {
   .main { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
   .left-panel { max-height: 200px; }

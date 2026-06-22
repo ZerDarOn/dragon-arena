@@ -22,8 +22,8 @@ export class WSClient {
   private ws: WebSocket | null = null
   private listeners: ((msg: ServerMessage) => void)[] = []
 
-  connect(roomId: string, playerId: string, nickname: string) {
-    this.ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/${roomId}?player_id=${playerId}&nickname=${encodeURIComponent(nickname)}`)
+  connect(roomId: string, token: string) {
+    this.ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/${roomId}?token=${encodeURIComponent(token)}`)
     this.ws.onmessage = (ev) => {
       this.listeners.forEach((l) => l(JSON.parse(ev.data)))
     }

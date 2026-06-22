@@ -1,3 +1,24 @@
+// ---- Auth ----
+export interface UserPublic {
+  id: string; nickname: string; is_admin: boolean
+  created_at: number; last_login_at: number
+}
+export interface LoginResponse {
+  token: string; user: UserPublic
+}
+
+// ---- Character Sheets ----
+export interface CharacterSheet {
+  id: string; owner_id: string
+  name: string; gender: string; profession: string; talent: string
+  hp_base: number; armor_base: number; ap_base: number
+  gold: number; backpack: string[]
+  equipment_slots: (string | null)[]; skill_slots: (string | null)[]
+  // present only for owner/admin views; absent for other viewers
+  secret_backups?: string[]
+  created_at: number; updated_at: number
+}
+
 export interface RoomConfig {
   map_width: number; map_height: number; vision_range: number
   move_ap_cost: number; sprint_ap_cost: number; sprint_distance: number
