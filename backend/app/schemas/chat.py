@@ -1,0 +1,15 @@
+from pydantic import BaseModel
+from typing import Optional, List
+
+
+class ChatMessage(BaseModel):
+    id: str
+    sender_id: str
+    channel: str  # hall/battle/private/spatial_normal/spatial_shout
+    content_type: str = "text"  # text/audio
+    text: Optional[str] = None
+    audio_url: Optional[str] = None
+    recipients: Optional[List[str]] = None  # None=broadcast (hall/battle)
+    # private=[a,b]
+    # spatial=explicit list at send time
+    timestamp: int = 0
