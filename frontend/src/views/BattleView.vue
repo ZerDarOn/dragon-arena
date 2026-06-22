@@ -46,6 +46,7 @@ import { useSelfStore } from '../stores/self'
 import { useChatStore } from '../stores/chat'
 import { useAuthStore } from '../stores/auth'
 import { WSClient, type ServerMessage } from '../api/ws'
+import { fetchMe } from '../api/rest'
 import GameCanvas from '../components/board/GameCanvas.vue'
 import PlayerList from '../components/sidebar/PlayerList.vue'
 import TurnOrder from '../components/sidebar/TurnOrder.vue'
@@ -124,7 +125,14 @@ function dispatchMessage(msg: ServerMessage) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // Verify token before connecting WS
+  try { await fetchMe() } catch {
+    auth.logout()
+    router.push('/login')
+    return
+  }
+
   const roomId = String(route.params.roomId)
   if (!auth.token) {
     router.push('/login')

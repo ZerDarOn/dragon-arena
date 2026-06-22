@@ -57,7 +57,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import { createRoom, listRooms } from '../api/rest'
+import { createRoom, listRooms, fetchMe } from '../api/rest'
 import type { Room } from '../api/types'
 import ChatPanel from '../components/chat/ChatPanel.vue'
 import SandboxView from './SandboxView.vue'
@@ -101,7 +101,15 @@ function onLogout() {
   router.push('/login')
 }
 
-onMounted(refreshRooms)
+onMounted(async () => {
+  // Verify stored token is still valid
+  try { await fetchMe() } catch {
+    auth.logout()
+    router.push('/login')
+    return
+  }
+  await refreshRooms()
+})
 </script>
 
 <style scoped>
