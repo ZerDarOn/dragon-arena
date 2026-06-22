@@ -21,6 +21,13 @@
         <p v-if="error" class="err">{{ error }}</p>
         <button type="submit" :disabled="loading">{{ loading ? '登录中...' : '登录' }}</button>
       </form>
+
+      <details class="hint-default">
+        <summary>首次使用？</summary>
+        <p>后端首次启动会自动创建默认管理员账号：</p>
+        <p><code>admin</code> / <code>admin123</code></p>
+        <p class="warn">登录后请立即在「用户管理」中修改或新建账号。</p>
+      </details>
     </div>
   </div>
 </template>
@@ -28,11 +35,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { useAuthStore, type LoginHistoryEntry } from '../stores/auth'
 import { login as apiLogin } from '../api/rest'
 
 const router = useRouter()
 const auth = useAuthStore()
+const { history } = storeToRefs(auth)
 const nickname = ref('')
 const password = ref('')
 const error = ref('')
@@ -90,4 +99,11 @@ button[type=submit] { padding: 10px; background: #0f3460; color: #fff; border: n
   font-size: 14px; cursor: pointer; }
 button[type=submit]:disabled { background: #999; cursor: not-allowed; }
 .err { color: #c33; font-size: 12px; margin: 0; }
+.hint-default { margin-top: 20px; padding-top: 12px; border-top: 1px dashed #ddd;
+  font-size: 12px; color: #666; }
+.hint-default summary { cursor: pointer; color: #888; }
+.hint-default p { margin: 6px 0; }
+.hint-default code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px;
+  font-family: monospace; }
+.hint-default .warn { color: #c33; }
 </style>

@@ -82,8 +82,12 @@ async function doCreateRoom() {
   if (!newRoomName.value) { createError.value = '请输入战役名'; return }
   try {
     const r = await createRoom(newRoomName.value)
+    console.log('[workbench] room created, navigating to /battle/' + r.id)
     router.push(`/battle/${r.id}`)
-  } catch (e: any) { createError.value = e.message }
+  } catch (e: any) {
+    console.error('[workbench] createRoom failed', e)
+    createError.value = e.message || '创建失败'
+  }
 }
 
 async function doJoin() {
@@ -119,6 +123,13 @@ summary { cursor: pointer; color: #888; font-size: 12px; }
 details ul { list-style: none; padding: 0; }
 details li { padding: 6px 0; border-bottom: 1px solid #eee; cursor: pointer; font-size: 13px; }
 details li:hover { background: #f5f5f5; }
+
+/* Modal slot content styles — needs :deep() to cross scoped boundary */
+:deep(.modal-body input) { padding: 6px 8px; border: 1px solid #ccc; border-radius: 3px;
+  font-size: 13px; width: 100%; box-sizing: border-box; margin-bottom: 8px; }
+:deep(.modal-body button) { padding: 8px 16px; background: #0f3460; color: #fff; border: none;
+  border-radius: 3px; cursor: pointer; font-size: 13px; }
+:deep(.modal-body button:hover) { background: #1a4a7a; }
 
 @media (max-width: 900px) {
   .body { grid-template-columns: 1fr; grid-template-rows: 200px 1fr; }

@@ -22,6 +22,28 @@ app.add_middleware(
 room_service = RoomService()
 
 
+@app.on_event("startup")
+def _bootstrap_admin():
+    """If users table is empty, seed a default admin account.
+
+    Default credentials: admin / admin123
+    CHANGE PASSWORD IMMEDIATELY after first login via admin panel.
+    """
+    from app.services.auth_service import hash_password
+    users = user_storage.list_users()
+    if users:
+        return
+    default_nick = os.environ.get("DRAGON_ARENA_DEFAULT_ADMIN", "admin")
+    default_pw = os.environ.get("DRAGON_ARENA_DEFAULT_PASSWORD", "admin123")
+    user_storage.create_user(default_nick, hash_password(default_pw), is_admin=True)
+    print("=" * 60)
+    print(f"  [BOOTSTRAP] Created default admin account")
+    print(f"  nickname : {default_nick}")
+    print(f"  password : {default_pw}")
+    print(f"  !!! Change this via admin panel ASAP")
+    print("=" * 60)
+
+
 # ---- Legacy room CRUD (now requires auth) ----
 
 class CreateRoomReq(BaseModel):

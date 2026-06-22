@@ -27,9 +27,7 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 h3 { margin: 0; font-size: 16px; }
 .x { background: transparent; border: none; font-size: 20px; cursor: pointer; color: #999; }
 .content { padding: 16px; overflow-y: auto; }
-input, textarea { padding: 6px; border: 1px solid #ccc; border-radius: 3px; font-size: 13px;
-  width: 100%; box-sizing: border-box; margin-bottom: 8px; }
-button { padding: 6px 12px; background: #0f3460; color: #fff; border: none; border-radius: 3px;
-  cursor: pointer; font-size: 13px; }
 .err { color: #c33; font-size: 12px; margin: 4px 0; }
+/* Note: slot content is NOT affected by these scoped styles in Vue 3.
+   Children must define their own input/button styles. */
 </style>
