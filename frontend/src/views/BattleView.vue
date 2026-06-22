@@ -1,11 +1,11 @@
 <template>
   <div class="battle-view">
     <header class="top-bar">
-      <span class="room-name">{{ room.room.value?.name ?? '...' }}</span>
-      <span class="turn-info" v-if="room.room.value">
-        大回合 {{ room.room.value.big_turn }} · 子回合 {{ room.room.value.sub_turn }}
+      <span class="room-name">{{ room.room?.name ?? '...' }}</span>
+      <span class="turn-info" v-if="room.room">
+        大回合 {{ room.room.big_turn }} · 子回合 {{ room.room.sub_turn }}
       </span>
-      <button v-if="room.room.value && !room.room.value.current_actor && auth.isAdmin"
+      <button v-if="room.room && !room.room.current_actor && auth.isAdmin"
               @click="startGame">开始游戏</button>
       <button @click="leave">离开战役</button>
     </header>
@@ -22,8 +22,8 @@
       <section class="board-area">
         <DMConsole v-if="auth.isAdmin" ref="dmRef" />
         <div class="canvas-wrap">
-          <GameCanvas v-if="room.room.value"
-                      :room="room.room.value"
+          <GameCanvas v-if="room.room"
+                      :room="room.room"
                       :self-token-id="selfTokenId"
                       :visible-cells="visibleCells"
                       :terrain-brush="dmRef?.selected"
@@ -68,7 +68,7 @@ let wsSendHandler: ((e: Event) => void) | null = null
 
 const selfTokenId = computed(() => {
   const pid = self.playerId
-  return room.room.value?.players[pid]?.token_id
+  return room.room?.players[pid]?.token_id
 })
 
 /**
@@ -77,7 +77,7 @@ const selfTokenId = computed(() => {
  * V1: replace with real vision_service (sector + raycast + fog).
  */
 const visibleCells = computed<Set<string> | undefined>(() => {
-  const r = room.room.value
+  const r = room.room
   if (!r) return undefined
   if (auth.isAdmin) return undefined
   const tid = selfTokenId.value
@@ -101,7 +101,7 @@ function onPath(path: [number, number][]) {
 }
 
 function startGame() {
-  const order = Object.values(room.room.value?.tokens ?? {})
+  const order = Object.values(room.room?.tokens ?? {})
     .filter((t) => !t.is_dead)
     .map((t) => t.id)
   ws.send({ type: 'set_turn_order', payload: { order } })

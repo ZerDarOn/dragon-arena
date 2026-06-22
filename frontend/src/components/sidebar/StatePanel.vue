@@ -7,8 +7,8 @@
 import { ref, computed } from 'vue'
 import { useRoomStore } from '../../stores/room'
 const room = useRoomStore()
-const tokens = computed(() => Object.values(room.room.value?.tokens ?? {}))
+const tokens = computed(() => Object.values(room.room?.tokens ?? {}))
 const tokenId = ref(''); const name = ref(''); const ttl = ref(1)
-const states = computed(() => room.room.value?.tokens[tokenId.value]?.states ?? [])
+const states = computed(() => room.room?.tokens[tokenId.value]?.states ?? [])
 function add() { window.dispatchEvent(new CustomEvent('ws-send', { detail: { type: 'add_state', payload: { token_id: tokenId.value, name: name.value, description: '', ttl: ttl.value } } })) }
 </script>

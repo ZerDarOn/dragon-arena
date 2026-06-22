@@ -6,7 +6,7 @@
 import { ref, computed } from 'vue'
 import { useRoomStore } from '../../stores/room'
 const room = useRoomStore()
-const tokens = computed(() => Object.values(room.room.value?.tokens ?? {}))
+const tokens = computed(() => Object.values(room.room?.tokens ?? {}))
 const tokenId = ref(''); const field = ref('hp'); const delta = ref(0)
 function apply() { window.dispatchEvent(new CustomEvent('ws-send', { detail: { type: 'modify_value', payload: { token_id: tokenId.value, field: field.value, delta: delta.value } } })) }
 </script>

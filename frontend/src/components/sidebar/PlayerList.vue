@@ -6,5 +6,5 @@
 import { computed } from 'vue'
 import { useRoomStore } from '../../stores/room'
 const room = useRoomStore()
-const players = computed(() => Object.values(room.room.value?.players ?? {}))
+const players = computed(() => Object.values(room.room?.players ?? {}))
 </script>
