@@ -2,10 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> Note: this `dragon-arena/` folder lives under `AiDome/临时/pvp/` only as a temporary storage
-> location. It is its own independent git repository, unrelated to the AiDome or NagaAgent
-> projects elsewhere in the workspace. Treat it as a standalone codebase.
-
 ## Project Overview
 
 龙王争霸赛战棋平台 (Dragon Arena) — a networked tactical-grid platform built specifically for a
