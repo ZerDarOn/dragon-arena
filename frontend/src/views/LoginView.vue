@@ -67,7 +67,7 @@ async function onLogin() {
   try {
     const data = await apiLogin(nickname.value, password.value)
     auth.setSession(data)
-    router.push('/workbench')
+    router.push('/main')
   } catch (e: any) {
     error.value = e.message || '登录失败'
   } finally {

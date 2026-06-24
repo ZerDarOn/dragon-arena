@@ -5,5 +5,6 @@ import type { Room } from '../api/types'
 export const useRoomStore = defineStore('room', () => {
   const room = ref<Room | null>(null)
   function setState(payload: Room) { room.value = payload }
-  return { room, setState }
+  function clear() { room.value = null }
+  return { room, setState, clear }
 })

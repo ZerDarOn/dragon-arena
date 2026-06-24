@@ -24,6 +24,19 @@ class MapService:
             self.map.terrain[y][x].height = 0
             self.map.terrain[y][x].is_smoke = False
             self.map.terrain[y][x].smoke_ttl = None
+            self.map.terrain[y][x].is_dark = False
+            self.map.terrain[y][x].light_radius = 0
+
+    def set_dark(self, x: int, y: int, is_dark: bool = True) -> None:
+        if not self._in_bounds(x, y):
+            return
+        self.map.terrain[y][x].is_dark = is_dark
+
+    def set_light(self, x: int, y: int, radius: int) -> None:
+        """设光源：radius>0 点亮周围，radius=0 移除光源"""
+        if not self._in_bounds(x, y):
+            return
+        self.map.terrain[y][x].light_radius = radius
 
     def set_height(self, x: int, y: int, h: int) -> None:
         if not self._in_bounds(x, y):

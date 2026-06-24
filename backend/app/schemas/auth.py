@@ -54,6 +54,12 @@ class CharacterSheet(BaseModel):
     equipment_slots: List[Optional[str]] = Field(default_factory=lambda: [None] * 6)
     skill_slots: List[Optional[str]] = Field(default_factory=lambda: [None, None])
     secret_backups: List[str] = Field(default_factory=list)
+    # 种族特性 / 感知（落子时快照到 Token）
+    darkvision: bool = False
+    vision_range: int = 6
+    listen_radius: int = 6
+    passive_perception: int = 10
+    stealth: int = 0
     created_at: int = Field(default_factory=lambda: int(time.time() * 1000))
     updated_at: int = Field(default_factory=lambda: int(time.time() * 1000))
 
@@ -73,6 +79,11 @@ class CharacterSheetPublic(BaseModel):
     backpack: List[str] = Field(default_factory=list)
     equipment_slots: List[Optional[str]] = Field(default_factory=lambda: [None] * 6)
     skill_slots: List[Optional[str]] = Field(default_factory=lambda: [None, None])
+    darkvision: bool = False
+    vision_range: int = 6
+    listen_radius: int = 6
+    passive_perception: int = 10
+    stealth: int = 0
     created_at: int = 0
     updated_at: int = 0
 
@@ -90,6 +101,11 @@ class CreateCharacterRequest(BaseModel):
     equipment_slots: List[Optional[str]] = Field(default_factory=lambda: [None] * 6)
     skill_slots: List[Optional[str]] = Field(default_factory=lambda: [None, None])
     secret_backups: List[str] = Field(default_factory=list)
+    darkvision: bool = False
+    vision_range: int = 6
+    listen_radius: int = 6
+    passive_perception: int = 10
+    stealth: int = 0
 
 
 def to_public(user: User) -> UserPublic:

@@ -44,3 +44,14 @@ class RoomConfig(BaseModel):
     # Turn
     turn_time_limit_sec: int = 10
     ap_regen: int = 2
+
+    fog_of_war_enabled: bool = True
+    # Poison Circle
+    poison_circle_radius: int = 15  # 初始半径，随回合收缩
+    poison_circle_damage_base: int = 5
+    poison_circle_damage_per_dist: int = 2
+    poison_circle_shrink_per_turn: int = 1
+    poison_circle_min_radius: int = 3
+    poison_circle_center_x: int = 15
+    poison_circle_center_y: int = 15
+    poison_circle_enabled: bool = True

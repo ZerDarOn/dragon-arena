@@ -3,8 +3,10 @@
     <div v-if="loading" class="loading">加载中...</div>
     <template v-else>
       <ul class="sheet-list">
-        <li v-for="s in sheets" :key="s.id" :class="{ active: editing?.id === s.id }"
-            @click="startEdit(s)">
+        <li v-for="s in sheets" :key="s.id" :class="{ active: editing?.id === s.id, dragging: dragSheetId === s.id }"
+            @click="startEdit(s)" draggable="true" @dragstart="onDragStart($event, s)" @dragend="dragSheetId = null"
+            :title="`拖拽「${s.name}」到地图投放`">
+          <span class="drag-handle">⋮⋮</span>
           <span>{{ s.name || '(未命名)' }}</span>
           <button class="del" @click.stop="onDelete(s)">删</button>
         </li>
@@ -37,21 +39,39 @@
           </div>
         </section>
 
+        <!-- 种族特性 / 感知 -->
+        <section class="block">
+          <h5>种族特性 / 感知 <span class="cp-hint">(影响战场视野与觉察)</span></h5>
+          <label class="check-row">
+            <input type="checkbox" v-model="editing.darkvision" />
+            <span>黑暗视觉（黑暗格仍可见）</span>
+          </label>
+          <div class="grid-nums">
+            <label>视野距离<input type="number" v-model.number="editing.vision_range" /></label>
+            <label>被动觉察范围<input type="number" v-model.number="editing.listen_radius" /></label>
+            <label>被动觉察值<input type="number" v-model.number="editing.passive_perception" /></label>
+            <label>隐匿值<input type="number" v-model.number="editing.stealth" /></label>
+          </div>
+        </section>
+
         <!-- 装备栏 -->
         <section class="block">
           <h5>装备栏 <span class="cp-hint">(6格 + 2技能槽 + 1外挂)</span></h5>
           <div class="equip-grid">
             <label class="slot" v-for="(slot, i) in EQUIP_SLOTS" :key="slot.key">
               <span class="slot-name">{{ slot.label }}</span>
-              <input v-model="editing.equipment_slots[i]" :placeholder="slot.placeholder" />
+              <input v-model="editing.equipment_slots[i]" :placeholder="slot.placeholder"
+                     list="equip-pool" />
             </label>
             <label class="slot" v-for="(slot, i) in SKILL_SLOTS" :key="slot.key">
               <span class="slot-name">{{ slot.label }}</span>
-              <input v-model="editing.skill_slots[i]" :placeholder="slot.placeholder" />
+              <input v-model="editing.skill_slots[i]" :placeholder="slot.placeholder"
+                     list="equip-pool" />
             </label>
             <label class="slot">
               <span class="slot-name">外挂</span>
-              <input v-model="editing.externals_str" placeholder="外挂名称" />
+              <input v-model="editing.externals_str" placeholder="外挂名称"
+                     list="equip-pool" />
             </label>
           </div>
         </section>
@@ -80,6 +100,10 @@
         </div>
       </div>
     </template>
+    <!-- 装备池 datalist（全局，供所有装备/技能/外挂输入框下拉） -->
+    <datalist id="equip-pool">
+      <option v-for="e in equips" :key="e" :value="e" />
+    </datalist>
   </div>
 </template>
 
@@ -87,6 +111,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { listMyCharacters, createCharacter, updateCharacter, deleteCharacter } from '../../api/rest'
 import type { CharacterSheet } from '../../api/types'
+import { equips } from '../../stores/resources'
 
 interface EditingSheet {
   id?: string
@@ -104,6 +129,11 @@ interface EditingSheet {
   externals_str: string
   backpack: string[]
   secrets_str: string
+  darkvision: boolean
+  vision_range: number
+  listen_radius: number
+  passive_perception: number
+  stealth: number
 }
 
 const EQUIP_SLOTS = [
@@ -124,6 +154,7 @@ const editing = ref<EditingSheet | null>(null)
 const loading = ref(true)
 const error = ref('')
 const saved = ref(false)
+const dragSheetId = ref<string | null>(null)
 
 // Simple creation-point estimate (configurable later)
 const usedCP = computed(() => {
@@ -146,6 +177,8 @@ function emptySheet(): EditingSheet {
     externals_str: '',
     backpack: ['', '', '', '', '', ''],
     secrets_str: '',
+    darkvision: false, vision_range: 6, listen_radius: 6,
+    passive_perception: 10, stealth: 0,
   }
 }
 
@@ -167,6 +200,11 @@ function startEdit(s: CharacterSheet) {
     externals_str: '',
     backpack: [...(s.backpack || []), '', '', '', '', '', ''].slice(0, 6),
     secrets_str: (s.secret_backups || []).join(', '),
+    darkvision: s.darkvision ?? false,
+    vision_range: s.vision_range ?? 6,
+    listen_radius: s.listen_radius ?? 6,
+    passive_perception: s.passive_perception ?? 10,
+    stealth: s.stealth ?? 0,
   }
   error.value = ''; saved.value = false
 }
@@ -210,6 +248,11 @@ async function onSave() {
     equipment_slots: equipment.map((s) => s.trim() || null),
     skill_slots: skills.map((s) => s.trim() || null),
     secret_backups: e.secrets_str.split(',').map((s) => s.trim()).filter(Boolean),
+    darkvision: e.darkvision,
+    vision_range: e.vision_range,
+    listen_radius: e.listen_radius,
+    passive_perception: e.passive_perception,
+    stealth: e.stealth,
   }
   try {
     if (e.id) {
@@ -235,6 +278,19 @@ async function onDelete(s: CharacterSheet) {
   }
 }
 
+function onDragStart(e: DragEvent, s: CharacterSheet) {
+  dragSheetId.value = s.id
+  e.dataTransfer?.setData('application/json', JSON.stringify({
+    kind: 'character_sheet', sheet_id: s.id, name: s.name,
+  }))
+  e.dataTransfer!.effectAllowed = 'copy'
+  // 设置拖拽时的视觉反馈图片
+  const el = e.target as HTMLElement
+  if (el) {
+    e.dataTransfer?.setDragImage(el, 10, 10)
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -249,6 +305,8 @@ onMounted(load)
 .sheet-list li.new { color: #0f3460; font-weight: bold; }
 .del { background: #c33; color: #fff; border: none; padding: 2px 6px;
   border-radius: 2px; cursor: pointer; font-size: 11px; }
+.drag-handle { color: #bbb; margin-right: 6px; font-size: 12px; cursor: grab; }
+.sheet-list li.dragging { opacity: 0.5; background: #e0f0ff; }
 .form { flex: 1; display: flex; flex-direction: column; gap: 12px; }
 .form h4 { margin: 0 0 4px; font-size: 15px; }
 .block { border: 1px solid #eee; border-radius: 4px; padding: 10px; background: #fafafa; }
@@ -258,6 +316,9 @@ onMounted(load)
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .grid-nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .grid-nums label { display: flex; flex-direction: column; font-size: 11px; color: #666; }
+.check-row { display: flex; align-items: center; gap: 6px; font-size: 12px;
+  color: #0f3460; margin-bottom: 8px; cursor: pointer; }
+.check-row input { width: auto; margin: 0; }
 .equip-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .slot { display: flex; flex-direction: column; font-size: 11px; }
 .slot-name { color: #0f3460; font-weight: 500; margin-bottom: 2px; }

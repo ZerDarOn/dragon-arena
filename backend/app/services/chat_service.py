@@ -57,13 +57,17 @@ class ChatService:
             if other.owner_id == sender_player_id or other.is_dead or not other.position:
                 continue
             target_pos = (other.position["x"], other.position["y"])
-            if chebyshev_distance(origin, target_pos) > radius:
+            dist = chebyshev_distance(origin, target_pos)
+            if dist > radius:
                 continue
             if not self.cfg.sound_through_wall and has_wall_between(self.map, origin, target_pos):
                 continue
             recipients.append(other.owner_id)
+        # 衰减：距离越远，声音越小（模拟）
+        attenuation = min(1.0, radius / max(1, self.cfg.speak_radius))
         return ChatMessage(
             id=str(uuid.uuid4()), sender_id=sender_player_id, channel=channel,
             content_type="text", text=text, recipients=recipients,
             timestamp=int(time.time() * 1000),
+            extra={"attenuation": attenuation, "distance": dist, "is_shout": is_shout},
         )

@@ -14,9 +14,27 @@ export interface CharacterSheet {
   hp_base: number; armor_base: number; ap_base: number
   gold: number; backpack: string[]
   equipment_slots: (string | null)[]; skill_slots: (string | null)[]
+  darkvision: boolean; vision_range: number; listen_radius: number
+  passive_perception: number; stealth: number
   // present only for owner/admin views; absent for other viewers
   secret_backups?: string[]
   created_at: number; updated_at: number
+}
+
+// ---- Map ----
+export interface TerrainCell {
+  x: number; y: number
+  type: 'flat' | 'wall' | 'grass' | 'water' | 'high'
+  height: number
+  smoke_ttl: number | null
+  is_smoke: boolean
+  is_dark: boolean
+  light_radius: number
+}
+export interface GameMap {
+  width: number; height: number
+  terrain: TerrainCell[][]
+  safe_zone: { center: { x: number; y: number }; radius: number }
 }
 
 export interface RoomConfig {
@@ -27,17 +45,30 @@ export interface RoomConfig {
   crit_success: number; crit_fail: number; defend_ap_cost: number
   speak_radius: number; shout_multiplier: number; sound_through_wall: boolean
   turn_time_limit_sec: number; ap_regen: number
+  fog_of_war_enabled?: boolean
+  poison_circle_enabled?: boolean
+  poison_circle_center_x?: number
+  poison_circle_center_y?: number
+  poison_circle_radius?: number
+  poison_circle_damage_base?: number
+  poison_circle_damage_per_dist?: number
+  poison_circle_shrink_per_turn?: number
+  poison_circle_min_radius?: number
 }
 
 export interface StateTag { id: string; name: string; description: string; ttl: number; intensity?: number }
 
 export interface Token {
-  id: string; type: string; owner_id?: string
+  id: string; type: string; owner_id?: string; actor_id?: string
   position?: { x: number; y: number }; facing: number
   hp: number; max_hp: number; armor: number; ap: number; max_ap: number
   gold: number; score: number; vision_range: number; listen_radius: number
+  passive_perception: number; darkvision: boolean; stealth: number
   states: StateTag[]; equipment_slots: (string | null)[]; skill_slots: (string | null)[]
-  backpack: string[]; is_dead: boolean; is_hidden: boolean
+  backpack: string[]; is_dead: boolean; is_hidden: boolean; size: number
+  character_name?: string
+  avatar_url?: string  // 头像 URL（base64 或外部链接）
+  item_charges?: Record<string, number>  // 道具剩余次数
 }
 
 export interface Player {
@@ -48,16 +79,83 @@ export interface Player {
 export interface Room {
   id: string; name: string; config: RoomConfig
   players: Record<string, Player>; tokens: Record<string, Token>
+  game_map?: GameMap
   current_actor?: string; turn_order: string[]
   big_turn: number; sub_turn: number
+  // 服务端按玩家定制追加（管理员视图无）
+  visible_cells?: [number, number][]
+  detected_tokens?: Record<string, string>
 }
 
 export interface ChatMessage {
   id: string; sender_id: string; channel: string; content_type: string
-  text?: string; recipients?: string[] | null; timestamp: number
+  text?: string; audio_url?: string; recipients?: string[] | null; timestamp: number
+  extra?: Record<string, any>  // spatial: attenuation, distance, is_shout
+}
+
+export interface CombatLog {
+  action: string
+  actor_id: string
+  target_id?: string
+  results: Array<{
+    rule: string
+    effects: Array<{
+      type: string
+      success: boolean
+      dice?: { value: number; modifier: number; total: number; crit_success: boolean; crit_fail: boolean }
+      hit?: { dc: number; roll: number; bonus: number; total: number; is_hit: boolean; is_crit: boolean; is_fail: boolean }
+      damage?: { raw_damage: number; armor: number; real_damage: number }
+      hp_after?: number
+      ap_after?: number
+      armor_after?: number
+      state_id?: string
+      is_hidden?: boolean
+      position?: { x: number; y: number }
+      reason?: string
+    }>
+    passive?: boolean
+    global?: boolean
+  }>
 }
 
 export interface DiceResult {
   value: number; modifier: number; total: number
   crit_success: boolean; crit_fail: boolean; sides: number
+}
+
+// ---- Actor Library ----
+
+export interface Actor {
+  id: string
+  name: string
+  type: 'player' | 'npc' | 'monster'
+  avatar_url?: string
+  hp: number; max_hp: number; armor: number; ap: number; max_ap: number
+  vision_range: number; darkvision: number; listen_radius: number
+  passive_perception: number; stealth: number
+  equipment_slots: (string | null)[]; skill_slots: (string | null)[]
+  backpack: string[]
+  created_at: number; updated_at: number
+}
+
+export interface ActorCreate {
+  name: string
+  type?: 'player' | 'npc' | 'monster'
+  avatar_url?: string
+  hp?: number; max_hp?: number; armor?: number; ap?: number; max_ap?: number
+  vision_range?: number; darkvision?: number; listen_radius?: number
+  passive_perception?: number; stealth?: number
+  equipment_slots?: (string | null)[]; skill_slots?: (string | null)[]
+  backpack?: string[]
+}
+
+export interface ActorUpdate {
+  name?: string
+  type?: 'player' | 'npc' | 'monster'
+  avatar_url?: string
+  hp?: number; max_hp?: number; armor?: number; ap?: number; max_ap?: number
+  vision_range?: number; darkvision?: number; listen_radius?: number
+  passive_perception?: number; stealth?: number
+  equipment_slots?: (string | null)[]; skill_slots?: (string | null)[]
+  backpack?: string[]
 }

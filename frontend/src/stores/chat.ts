@@ -1,3 +1,4 @@
+// frontend/src/stores/chat.ts
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { ChatMessage } from '../api/types'
@@ -24,5 +25,14 @@ export const useChatStore = defineStore('chat', () => {
       ;(privateChats.value[other] ||= []).push(msg)
     } else if (msg.channel.startsWith('spatial')) inbox.value.push(msg)
   }
-  return { hall, battle, privateChats, inbox, campaignHall, warHall, addMessage }
+
+  function getPrivateMessages(otherId: string): ChatMessage[] {
+    return privateChats.value[otherId] || []
+  }
+
+  function getAllPrivatePartners(): string[] {
+    return Object.keys(privateChats.value)
+  }
+
+  return { hall, battle, privateChats, inbox, campaignHall, warHall, addMessage, getPrivateMessages, getAllPrivatePartners }
 })

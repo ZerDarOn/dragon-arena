@@ -1,6 +1,7 @@
 import os
-from fastapi import FastAPI, HTTPException, WebSocket, Depends, Request
+from fastapi import FastAPI, HTTPException, WebSocket, Depends, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List
 from app.services.room_service import RoomService
@@ -13,6 +14,7 @@ from app.schemas.auth import (
 from app.services.user_storage import UserStorage
 from app.deps import user_storage, get_current_user, require_admin, get_current_user_ws
 from app.ws.handler import handle_ws_connection
+from app.schemas.actor import ActorCreate, ActorUpdate
 
 app = FastAPI(title="Dragon Arena")
 app.add_middleware(
@@ -21,6 +23,10 @@ app.add_middleware(
 )
 room_service = RoomService()
 
+# 确保上传目录存在
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.on_event("startup")
 def _bootstrap_admin():
@@ -127,6 +133,12 @@ async def list_my_characters(user: User = Depends(get_current_user)):
     return user_storage.list_characters_by_owner(user.id)
 
 
+@app.get("/admin/characters", response_model=List[CharacterSheet])
+async def list_all_characters(user: User = Depends(require_admin)):
+    """Admin only: all character sheets with secret_backups."""
+    return user_storage.list_all_characters()
+
+
 @app.post("/characters", response_model=CharacterSheet)
 async def create_character(req: CreateCharacterRequest, user: User = Depends(get_current_user)):
     import time, uuid
@@ -137,6 +149,9 @@ async def create_character(req: CreateCharacterRequest, user: User = Depends(get
         gold=req.gold, backpack=req.backpack,
         equipment_slots=req.equipment_slots, skill_slots=req.skill_slots,
         secret_backups=req.secret_backups,
+        darkvision=req.darkvision, vision_range=req.vision_range,
+        listen_radius=req.listen_radius,
+        passive_perception=req.passive_perception, stealth=req.stealth,
         created_at=int(time.time() * 1000), updated_at=int(time.time() * 1000),
     )
     return user_storage.create_character(sheet)
@@ -162,6 +177,11 @@ async def update_character(sheet_id: str, req: CreateCharacterRequest,
     sheet.equipment_slots = req.equipment_slots
     sheet.skill_slots = req.skill_slots
     sheet.secret_backups = req.secret_backups
+    sheet.darkvision = req.darkvision
+    sheet.vision_range = req.vision_range
+    sheet.listen_radius = req.listen_radius
+    sheet.passive_perception = req.passive_perception
+    sheet.stealth = req.stealth
     if not user_storage.update_character(sheet):
         raise HTTPException(500, "update failed")
     return sheet
@@ -216,6 +236,59 @@ async def update_config(room_id: str, req: UpdateConfigReq):
         raise HTTPException(404, "room not found")
     room.config = room.config.model_copy(update=req.model_dump(exclude_none=True))
     return room.model_dump()
+
+
+# ---- Actor Library (角色卡模板库) ----
+
+@app.get("/api/actors", dependencies=[Depends(get_current_user)])
+async def list_actors(type: Optional[str] = None):
+    return user_storage.list_actors(type=type)
+
+
+@app.post("/api/actors", dependencies=[Depends(require_admin)])
+async def create_actor(req: ActorCreate):
+    return user_storage.create_actor(req)
+
+
+@app.put("/api/actors/{actor_id}", dependencies=[Depends(require_admin)])
+async def update_actor(actor_id: str, req: ActorUpdate):
+    actor = user_storage.update_actor(actor_id, req)
+    if not actor:
+        raise HTTPException(404, "actor not found")
+    return actor
+
+
+@app.delete("/api/actors/{actor_id}", dependencies=[Depends(require_admin)])
+async def delete_actor(actor_id: str):
+    if not user_storage.delete_actor(actor_id):
+        raise HTTPException(404, "actor not found")
+    return {"ok": True}
+
+
+# ---- 头像上传 ----
+
+@app.post("/api/upload/avatar", dependencies=[Depends(get_current_user)])
+async def upload_avatar(file: UploadFile = File(...)):
+    """上传头像图片，返回可访问 URL。支持 png/jpg/gif/webp，最大 2MB。"""
+    ALLOWED_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+    MAX_SIZE = 2 * 1024 * 1024  # 2MB
+
+    if file.content_type not in ALLOWED_TYPES:
+        raise HTTPException(400, "只支持 png/jpg/gif/webp 图片")
+
+    content = await file.read()
+    if len(content) > MAX_SIZE:
+        raise HTTPException(400, "图片超过 2MB 限制")
+
+    ext = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(file.content_type, "bin")
+    import uuid, time
+    filename = f"avatar_{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    # 返回相对 URL（前端通过 /uploads/... 访问）
+    return {"url": f"/uploads/{filename}"}
 
 
 @app.websocket("/ws/{room_id}")

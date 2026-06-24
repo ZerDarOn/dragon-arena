@@ -22,13 +22,34 @@ class TokenService:
         self.map_svc = MapService(game_map)
         self.cfg = room.config
 
-    def place_token(self, token_id: str, x: int, y: int) -> bool:
+    def place_token(self, token_id: str, x: int, y: int,
+                    character: Optional[dict] = None) -> bool:
+        """Place token at (x,y). If character dict provided, apply its snapshot."""
         for t in self.room.tokens.values():
             if t.position == {"x": x, "y": y} and not t.is_dead:
                 return False
         if token_id not in self.room.tokens:
             self.room.tokens[token_id] = Token(id=token_id)
-        self.room.tokens[token_id].position = {"x": x, "y": y}
+        tok = self.room.tokens[token_id]
+        tok.position = {"x": x, "y": y}
+        # Apply character sheet snapshot if provided
+        if character:
+            tok.hp = character.get("hp_base", self.cfg.start_hp)
+            tok.max_hp = tok.hp
+            tok.armor = character.get("armor_base", self.cfg.start_armor)
+            tok.ap = character.get("ap_base", self.cfg.start_ap)
+            tok.max_ap = tok.ap
+            tok.gold = character.get("gold", 0)
+            tok.vision_range = character.get("vision_range", self.cfg.vision_range)
+            tok.listen_radius = character.get("listen_radius", 6)
+            tok.passive_perception = character.get("passive_perception", 10)
+            tok.darkvision = character.get("darkvision", False)
+            tok.stealth = character.get("stealth", 0)
+            tok.equipment_slots = character.get("equipment_slots", [None] * 6)
+            tok.skill_slots = character.get("skill_slots", [None, None])
+            tok.backpack = list(character.get("backpack", []))
+            # owner_id tracks which user controls this token
+            tok.owner_id = character.get("owner_id")
         return True
 
     def move_along_path(self, token_id: str, path: List[Tuple[int, int]]) -> MoveResult:

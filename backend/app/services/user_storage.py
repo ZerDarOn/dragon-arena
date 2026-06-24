@@ -68,6 +68,44 @@ class UserStorage:
             );
             CREATE INDEX IF NOT EXISTS idx_char_owner ON character_sheets(owner_id);
             """)
+            # 兼容旧库：补充新列（IF NOT EXISTS 等价写法——捕获重复列错误）
+            for col, ddl in [
+                ("darkvision", "INTEGER NOT NULL DEFAULT 0"),
+                ("vision_range", "INTEGER NOT NULL DEFAULT 6"),
+                ("listen_radius", "INTEGER NOT NULL DEFAULT 6"),
+                ("passive_perception", "INTEGER NOT NULL DEFAULT 10"),
+                ("stealth", "INTEGER NOT NULL DEFAULT 0"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE character_sheets ADD COLUMN {col} {ddl}")
+                except Exception:
+                    pass  # 列已存在
+
+            # Actor 库表（角色卡模板）
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS actors (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'npc',
+                avatar_url TEXT,
+                hp INTEGER NOT NULL DEFAULT 100,
+                max_hp INTEGER NOT NULL DEFAULT 100,
+                armor INTEGER NOT NULL DEFAULT 5,
+                ap INTEGER NOT NULL DEFAULT 2,
+                max_ap INTEGER NOT NULL DEFAULT 2,
+                vision_range INTEGER NOT NULL DEFAULT 8,
+                darkvision INTEGER NOT NULL DEFAULT 0,
+                listen_radius INTEGER NOT NULL DEFAULT 6,
+                passive_perception INTEGER NOT NULL DEFAULT 10,
+                stealth INTEGER NOT NULL DEFAULT 0,
+                equipment_slots TEXT NOT NULL DEFAULT '[null,null,null,null,null,null]',
+                skill_slots TEXT NOT NULL DEFAULT '[null,null]',
+                backpack TEXT NOT NULL DEFAULT '[]',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_actor_type ON actors(type);
+            """)
 
     # ---- Users ----
 
@@ -138,13 +176,16 @@ class UserStorage:
                 (id, owner_id, name, gender, profession, talent,
                  hp_base, armor_base, ap_base, gold,
                  backpack, equipment_slots, skill_slots, secret_backups,
+                 darkvision, vision_range, listen_radius, passive_perception, stealth,
                  created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (sheet.id, sheet.owner_id, sheet.name, sheet.gender,
                  sheet.profession, sheet.talent,
                  sheet.hp_base, sheet.armor_base, sheet.ap_base, sheet.gold,
                  self._dumps(sheet.backpack), self._dumps(sheet.equipment_slots),
                  self._dumps(sheet.skill_slots), self._dumps(sheet.secret_backups),
+                 int(sheet.darkvision), sheet.vision_range, sheet.listen_radius,
+                 sheet.passive_perception, sheet.stealth,
                  sheet.created_at, sheet.updated_at),
             )
         return sheet
@@ -164,6 +205,14 @@ class UserStorage:
             ).fetchall()
         return [self._row_to_sheet(r) for r in rows]
 
+    def list_all_characters(self) -> List[CharacterSheet]:
+        """管理员用：列出全部角色卡（含底牌）。"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM character_sheets ORDER BY updated_at DESC"
+            ).fetchall()
+        return [self._row_to_sheet(r) for r in rows]
+
     def update_character(self, sheet: CharacterSheet) -> bool:
         sheet.updated_at = int(time.time() * 1000)
         with self._conn() as conn, _LOCK:
@@ -172,12 +221,16 @@ class UserStorage:
                    name=?, gender=?, profession=?, talent=?,
                    hp_base=?, armor_base=?, ap_base=?, gold=?,
                    backpack=?, equipment_slots=?, skill_slots=?, secret_backups=?,
+                   darkvision=?, vision_range=?, listen_radius=?,
+                   passive_perception=?, stealth=?,
                    updated_at=?
                    WHERE id=? AND owner_id=?""",
                 (sheet.name, sheet.gender, sheet.profession, sheet.talent,
                  sheet.hp_base, sheet.armor_base, sheet.ap_base, sheet.gold,
                  self._dumps(sheet.backpack), self._dumps(sheet.equipment_slots),
                  self._dumps(sheet.skill_slots), self._dumps(sheet.secret_backups),
+                 int(sheet.darkvision), sheet.vision_range, sheet.listen_radius,
+                 sheet.passive_perception, sheet.stealth,
                  sheet.updated_at, sheet.id, sheet.owner_id),
             )
             return cur.rowcount > 0
@@ -193,6 +246,7 @@ class UserStorage:
     @staticmethod
     def _row_to_sheet(row: sqlite3.Row) -> CharacterSheet:
         import json
+        keys = row.keys()
         return CharacterSheet(
             id=row["id"], owner_id=row["owner_id"], name=row["name"],
             gender=row["gender"], profession=row["profession"], talent=row["talent"],
@@ -202,6 +256,11 @@ class UserStorage:
             equipment_slots=json.loads(row["equipment_slots"]),
             skill_slots=json.loads(row["skill_slots"]),
             secret_backups=json.loads(row["secret_backups"]),
+            darkvision=bool(row["darkvision"]) if "darkvision" in keys else False,
+            vision_range=row["vision_range"] if "vision_range" in keys else 6,
+            listen_radius=row["listen_radius"] if "listen_radius" in keys else 6,
+            passive_perception=row["passive_perception"] if "passive_perception" in keys else 10,
+            stealth=row["stealth"] if "stealth" in keys else 0,
             created_at=row["created_at"], updated_at=row["updated_at"],
         )
 
@@ -209,3 +268,87 @@ class UserStorage:
     def _dumps(v) -> str:
         import json
         return json.dumps(v)
+
+    # ---- Actors (角色卡模板库) ----
+
+    def create_actor(self, data) -> dict:
+        import uuid, json
+        aid = str(uuid.uuid4())[:8]
+        now = int(time.time() * 1000)
+        d = data.model_dump()
+        with self._conn() as conn, _LOCK:
+            conn.execute(
+                """INSERT INTO actors (id, name, type, avatar_url, hp, max_hp, armor, ap, max_ap,
+                   vision_range, darkvision, listen_radius, passive_perception, stealth,
+                   equipment_slots, skill_slots, backpack, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (aid, d["name"], d["type"], d.get("avatar_url"),
+                 d["hp"], d["max_hp"], d["armor"], d["ap"], d["max_ap"],
+                 d["vision_range"], d["darkvision"], d["listen_radius"],
+                 d["passive_perception"], d["stealth"],
+                 json.dumps(d.get("equipment_slots") or [None]*6),
+                 json.dumps(d.get("skill_slots") or [None, None]),
+                 json.dumps(d.get("backpack") or []),
+                 now, now),
+            )
+        return self.get_actor(aid)
+
+    def get_actor(self, actor_id: str) -> Optional[dict]:
+        import json
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM actors WHERE id = ?", (actor_id,)).fetchone()
+        if not row:
+            return None
+        return self._row_to_actor(row)
+
+    def list_actors(self, type: Optional[str] = None) -> List[dict]:
+        with self._conn() as conn:
+            if type:
+                rows = conn.execute("SELECT * FROM actors WHERE type = ? ORDER BY created_at DESC", (type,)).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM actors ORDER BY created_at DESC").fetchall()
+        return [self._row_to_actor(r) for r in rows]
+
+    def update_actor(self, actor_id: str, data) -> Optional[dict]:
+        import json
+        actor = self.get_actor(actor_id)
+        if not actor:
+            return None
+        d = data.model_dump(exclude_unset=True)
+        now = int(time.time() * 1000)
+        sets = []
+        vals = []
+        for k, v in d.items():
+            if k in ("equipment_slots", "skill_slots", "backpack"):
+                sets.append(f"{k} = ?")
+                vals.append(json.dumps(v))
+            else:
+                sets.append(f"{k} = ?")
+                vals.append(v)
+        sets.append("updated_at = ?")
+        vals.append(now)
+        vals.append(actor_id)
+        with self._conn() as conn, _LOCK:
+            conn.execute(f"UPDATE actors SET {', '.join(sets)} WHERE id = ?", vals)
+        return self.get_actor(actor_id)
+
+    def delete_actor(self, actor_id: str) -> bool:
+        with self._conn() as conn, _LOCK:
+            cur = conn.execute("DELETE FROM actors WHERE id = ?", (actor_id,))
+            return cur.rowcount > 0
+
+    @staticmethod
+    def _row_to_actor(row) -> dict:
+        import json
+        return {
+            "id": row["id"], "name": row["name"], "type": row["type"],
+            "avatar_url": row["avatar_url"], "hp": row["hp"], "max_hp": row["max_hp"],
+            "armor": row["armor"], "ap": row["ap"], "max_ap": row["max_ap"],
+            "vision_range": row["vision_range"], "darkvision": row["darkvision"],
+            "listen_radius": row["listen_radius"],
+            "passive_perception": row["passive_perception"], "stealth": row["stealth"],
+            "equipment_slots": json.loads(row["equipment_slots"]),
+            "skill_slots": json.loads(row["skill_slots"]),
+            "backpack": json.loads(row["backpack"]),
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }

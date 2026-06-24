@@ -59,6 +59,12 @@ export async function listMyCharacters(): Promise<CharacterSheet[]> {
   return r.json()
 }
 
+export async function listAllCharacters(): Promise<CharacterSheet[]> {
+  const r = await fetch(`${API}/admin/characters`, { headers: authHeaders() })
+  if (!r.ok) throw new Error('获取全部角色卡失败')
+  return r.json()
+}
+
 export async function createCharacter(body: Omit<CharacterSheet, 'id' | 'owner_id' | 'created_at' | 'updated_at'>): Promise<CharacterSheet> {
   const r = await fetch(`${API}/characters`, {
     method: 'POST', headers: authHeaders(),
@@ -107,5 +113,14 @@ export async function listRooms() {
 export async function getRoom(roomId: string) {
   const r = await fetch(`${API}/rooms/${roomId}`, { headers: authHeaders() })
   if (!r.ok) throw new Error('房间不存在')
+  return r.json()
+}
+
+export async function updateRoomConfig(roomId: string, body: Record<string, any>) {
+  const r = await fetch(`${API}/rooms/${roomId}/config`, {
+    method: 'PATCH', headers: authHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error('更新房间配置失败')
   return r.json()
 }

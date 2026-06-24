@@ -9,6 +9,8 @@ class TerrainCell(BaseModel):
     height: int = 0
     smoke_ttl: Optional[int] = None
     is_smoke: bool = False
+    is_dark: bool = False       # 环境黑暗格（洞穴/夜晚），无光源且无黑暗视觉则不可见
+    light_radius: int = 0       # 光源照亮半径（0=非光源；火把/篝火/法术光>0）
 
 
 class GameMap(BaseModel):
