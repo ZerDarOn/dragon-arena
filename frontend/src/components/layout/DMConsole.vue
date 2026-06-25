@@ -65,9 +65,10 @@
         <label>中心X <input type="number" v-model.number="poisonCX" @change="emitPoison" /></label>
         <label>中心Y <input type="number" v-model.number="poisonCY" @change="emitPoison" /></label>
       </div>
-      <label>半径 <code>{{ poisonRadius }}</code></label>
-      <input type="range" v-model.number="poisonRadius" min="1" max="50" @change="emitPoison" />
+      <label>安全区半径 <code>{{ poisonRadius }}</code></label>
+      <input type="range" v-model.number="poisonRadius" min="0" max="50" @change="emitPoison" />
       <button class="btn-primary" @click="emitPoison">应用毒圈设置</button>
+      <p class="hint">圈内=安全区，圈外=毒圈（每回合受伤）。调小半径=安全区收缩，直到 0 消失。</p>
     </div>
 
     <!-- 迷雾控制 -->

@@ -553,19 +553,37 @@ function drawStrokes_(ctx: CanvasRenderingContext2D) {
 }
 
 function drawPoisonCircle(ctx: CanvasRenderingContext2D) {
-  const cfg = props.room.config
-  const poisonCfg = props.room.game_map as any
-  if (!poisonCfg || !poisonCfg.poison_circle_enabled) return
-  const cx = (poisonCfg.poison_circle_center_x ?? cfg.map_width / 2) * CELL + CELL / 2
-  const cy = (poisonCfg.poison_circle_center_y ?? cfg.map_height / 2) * CELL + CELL / 2
-  const r = (poisonCfg.poison_circle_radius ?? 15) * CELL
-  ctx.strokeStyle = 'rgba(200, 50, 50, 0.8)'
+  // 毒圈/安全区参数在 room.config（之前误读成 room.game_map，导致永远不渲染）。
+  // 概念：圈内=安全区，圈外=毒圈（受伤），圈会随回合收缩直到消失——同吃鸡。
+  const cfg = props.room.config as any
+  if (!cfg || !cfg.poison_circle_enabled) return
+  const cx = (cfg.poison_circle_center_x ?? cfg.map_width / 2) * CELL + CELL / 2
+  const cy = (cfg.poison_circle_center_y ?? cfg.map_height / 2) * CELL + CELL / 2
+  const r = Math.max(0, (cfg.poison_circle_radius ?? 15)) * CELL
+  const boardW = cfg.map_width * CELL
+  const boardH = cfg.map_height * CELL
+
+  ctx.save()
+  // 圈外（毒圈）淡红——用 even-odd 在棋盘范围内挖掉安全圈，染剩下的危险区
+  ctx.fillStyle = 'rgba(180, 30, 30, 0.16)'
+  ctx.beginPath()
+  ctx.rect(0, 0, boardW, boardH)
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fill('evenodd')
+  // 圈内（安全区）极淡绿
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(60, 200, 120, 0.05)'
+  ctx.fill()
+  // 安全区边界：醒目红色虚线
+  ctx.strokeStyle = 'rgba(220, 40, 40, 0.9)'
   ctx.lineWidth = 3
-  ctx.setLineDash([8, 4])
+  ctx.setLineDash([10, 6])
   ctx.beginPath()
   ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.stroke()
   ctx.setLineDash([])
+  ctx.restore()
 }
 
 function drawDetectedMarkers(ctx: CanvasRenderingContext2D) {
