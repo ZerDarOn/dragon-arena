@@ -95,6 +95,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useActorStore } from '../../stores/actors'
+import { uploadAvatar } from '../../api/rest'
 import type { Actor, ActorCreate } from '../../api/types'
 
 const actorStore = useActorStore()
@@ -163,17 +164,8 @@ async function onAvatarUpload(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  const form = new FormData()
-  form.append('file', file)
   try {
-    const r = await fetch(`http://${window.location.hostname}:8000/api/upload/avatar`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${localStorage.getItem('dragon_arena_token') || ''}` },
-      body: form,
-    })
-    if (!r.ok) throw new Error('上传失败')
-    const data = await r.json()
-    actorForm.value.avatar_url = `http://${window.location.hostname}:8000${data.url}`
+    actorForm.value.avatar_url = await uploadAvatar(file)
   } catch (err) {
     alert('头像上传失败: ' + (err as Error).message)
   } finally {

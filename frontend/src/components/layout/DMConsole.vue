@@ -77,6 +77,42 @@
         <span>启用战争迷雾</span>
       </label>
       <p class="hint">关闭后所有玩家可见全图</p>
+      <hr />
+      <label class="check-row">
+        <input type="checkbox" v-model="allowPlacement" @change="emitPlacement" />
+        <span>允许玩家自助落子</span>
+      </label>
+      <p class="hint">默认关闭——由你统一安排落子。开启后玩家可自行选择角色卡落子</p>
+    </div>
+
+    <!-- 模式与落子 -->
+    <div v-if="activeTab === 'mode'" class="panel">
+      <label class="check-row">
+        <input type="checkbox" v-model="freeMode" @change="emitFreeMode" />
+        <span>自由模式（测试用）</span>
+      </label>
+      <p class="warn">⚠ 忽略 AP/回合/落子等所有规则限制，所有人可随意操作</p>
+      <hr />
+      <label class="check-row">
+        <input type="checkbox" v-model="allowPlacement" @change="emitPlacement" />
+        <span>允许玩家自助落子</span>
+      </label>
+      <hr />
+      <div class="placement-group">
+        <label>随机落子（未落子的玩家）</label>
+        <div class="btn-row">
+          <button class="btn" @click="emitRandom('all')">全图随机</button>
+          <button class="btn" @click="emitRandom('edge')">边缘分布</button>
+        </div>
+        <div class="coord">
+          <input v-model.number="ax1" type="number" placeholder="x1" />
+          <input v-model.number="ay1" type="number" placeholder="y1" />
+          <span>→</span>
+          <input v-model.number="ax2" type="number" placeholder="x2" />
+          <input v-model.number="ay2" type="number" placeholder="y2" />
+          <button class="btn" @click="emitRandom('area')">区域内</button>
+        </div>
+      </div>
     </div>
 
     <!-- 回合控制 -->
@@ -113,6 +149,9 @@ const emit = defineEmits<{
   (e: 'fill-area', area: { x1: number; y1: number; x2: number; y2: number; type: string }): void
   (e: 'set-poison-circle', cfg: { center_x: number; center_y: number; radius: number; enabled: boolean }): void
   (e: 'set-fog-of-war', enabled: boolean): void
+  (e: 'set-player-placement', enabled: boolean): void
+  (e: 'set-free-mode', enabled: boolean): void
+  (e: 'random-placement', mode: string, area?: { x1: number; y1: number; x2: number; y2: number }): void
   (e: 'set-turn-order', order: string[]): void
   (e: 'shuffle-turn-order'): void
   (e: 'force-set-actor', tokenId: string): void
@@ -124,6 +163,7 @@ const tabs = [
   { key: 'terrain', label: '地形' },
     { key: 'poison', label: '毒圈' },
     { key: 'fog', label: '迷雾' },
+    { key: 'mode', label: '模式' },
     { key: 'turn', label: '回合' },
     { key: 'map', label: '地图' },
 ]
@@ -191,6 +231,29 @@ function emitPoison() {
 const fogEnabled = ref(true)
 function emitFog() {
   emit('set-fog-of-war', fogEnabled.value)
+}
+
+// Player placement permission
+const allowPlacement = ref(false)
+function emitPlacement() {
+  emit('set-player-placement', allowPlacement.value)
+}
+
+// Free mode (测试用：忽略所有规则限制)
+const freeMode = ref(false)
+function emitFreeMode() {
+  emit('set-free-mode', freeMode.value)
+}
+
+// 随机落子
+const ax1 = ref(0); const ay1 = ref(0)
+const ax2 = ref(10); const ay2 = ref(10)
+function emitRandom(mode: string) {
+  if (mode === 'area') {
+    emit('random-placement', mode, { x1: ax1.value, y1: ay1.value, x2: ax2.value, y2: ay2.value })
+  } else {
+    emit('random-placement', mode)
+  }
 }
 
 // Turn order

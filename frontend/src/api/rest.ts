@@ -28,6 +28,23 @@ export async function fetchMe(): Promise<UserPublic> {
   return r.json()
 }
 
+/**
+ * 上传头像，返回可直接用的绝对 URL。
+ * 注意：multipart 不能带 Content-Type（让浏览器自动生成 boundary），所以只取 Authorization，
+ * 不用 authHeaders()。此前这段逻辑在 ResourceManager / MiniResPanel 里各复制了一份并硬编码了 URL。
+ */
+export async function uploadAvatar(file: File): Promise<string> {
+  const auth = useAuthStore()
+  const form = new FormData()
+  form.append('file', file)
+  const r = await fetch(`${API}/api/upload/avatar`, {
+    method: 'POST', headers: { ...auth.authHeader() }, body: form,
+  })
+  if (!r.ok) throw new Error('头像上传失败')
+  const data = await r.json()
+  return `${API}${data.url}`
+}
+
 export async function adminListUsers(): Promise<UserPublic[]> {
   const r = await fetch(`${API}/admin/users`, { headers: authHeaders() })
   if (!r.ok) throw new Error('无法获取用户列表')

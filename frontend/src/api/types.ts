@@ -48,6 +48,8 @@ export interface RoomConfig {
   speak_radius: number; shout_multiplier: number; sound_through_wall: boolean
   turn_time_limit_sec: number; ap_regen: number
   fog_of_war_enabled?: boolean
+  allow_player_placement?: boolean
+  free_mode?: boolean
   poison_circle_enabled?: boolean
   poison_circle_center_x?: number
   poison_circle_center_y?: number

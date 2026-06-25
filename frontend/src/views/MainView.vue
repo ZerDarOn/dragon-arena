@@ -89,7 +89,7 @@
         <!-- 战役态：DMConsole(管理员) + GameCanvas -->
         <template v-else>
           <DMConsole v-if="auth.isAdmin" ref="dmRef"
-                     @resize="onMapResize" @fill-area="onFillArea" @set-poison-circle="onSetPoisonCircle" @set-fog-of-war="onSetFogOfWar" @set-turn-order="onSetTurnOrder" @shuffle-turn-order="onShuffleTurn" @force-set-actor="onForceActor" @clear-combat-log="onClearCombatLog" />
+                     @resize="onMapResize" @fill-area="onFillArea" @set-poison-circle="onSetPoisonCircle" @set-fog-of-war="onSetFogOfWar" @set-player-placement="onSetPlayerPlacement" @set-free-mode="onSetFreeMode" @random-placement="onRandomPlacement" @set-turn-order="onSetTurnOrder" @shuffle-turn-order="onShuffleTurn" @force-set-actor="onForceActor" @clear-combat-log="onClearCombatLog" />
           <!-- 底图工具栏（管理员可见） -->
           <div v-if="auth.isAdmin" class="bg-toolbar">
             <label class="bg-btn">
@@ -189,6 +189,19 @@
         </li>
         <li v-if="!mySheets.length" class="empty">还没有角色卡。请先到「角色卡」创建一张。</li>
       </ul>
+    </Modal>
+
+    <!-- 排名弹窗 -->
+    <Modal v-if="showRanking" title="当前排名" @close="showRanking = false">
+      <ol class="ranking-list" v-if="rankingData?.ranking?.length">
+        <li v-for="(entry, i) in rankingData.ranking" :key="entry.token_id || i" class="ranking-item">
+          <span class="rank">{{ i + 1 }}</span>
+          <span class="name">{{ entry.name || entry.token_id }}</span>
+          <span class="score" v-if="entry.score !== undefined">{{ entry.score }}分</span>
+          <span class="status" v-if="entry.is_dead">已淘汰</span>
+        </li>
+      </ol>
+      <p v-else class="empty">暂无排名数据</p>
     </Modal>
 
     <!-- 双击棋子查看角色/单位卡（只读） -->
@@ -488,6 +501,8 @@ const showCreate = ref(false); const showJoin = ref(false)
 const showSheet = ref(false); const showUsers = ref(false)
 const editingSheetId = ref<string | null>(null)
 const showRes = ref(false); const showSheetPicker = ref(false)
+const showRanking = ref(false)
+const rankingData = ref<{ ranking: any[]; elimination_order: string[] } | null>(null)
 const newRoomName = ref(''); const newMapW = ref(30); const newMapH = ref(30)
 const createError = ref(''); const joinError = ref('')
 const joinRoomId = ref('')
@@ -648,6 +663,11 @@ function dispatchMessage(msg: ServerMessage) {
   else if (m.type === 'error') {
     pushToast(m.payload?.message || '操作失败', 'error')
   }
+  else if (m.type === 'ranking') {
+    // Phase 2: 接收服务端排名快照，弹窗展示
+    rankingData.value = m.payload
+    showRanking.value = true
+  }
 }
 
 function nameOfToken(tokenId: string): string {
@@ -781,7 +801,11 @@ function buyFromShop(shopTokenId: string, itemName: string) {
 }
 
 // --- 监听未落子时自动弹选角色卡 ---
+// 管理员不落子；玩家仅在 DM 开启 allow_player_placement 时才弹
 function checkPlacementNeeded() {
+  if (auth.isAdmin) return
+  const allowed = room.room?.config?.allow_player_placement ?? false
+  if (!allowed) return
   if (inBattle.value && !selfTokenId.value && !selectedCharacter.value && !showSheetPicker.value) {
     openSheetPicker()
   }
@@ -800,6 +824,17 @@ function onSetPoisonCircle(cfg: { center_x: number; center_y: number; radius: nu
 
 function onSetFogOfWar(enabled: boolean) {
   wsSend({ type: 'set_fog_of_war', payload: { enabled } })
+}
+function onSetPlayerPlacement(enabled: boolean) {
+  wsSend({ type: 'set_player_placement', payload: { enabled } })
+}
+function onSetFreeMode(enabled: boolean) {
+  wsSend({ type: 'set_free_mode', payload: { enabled } })
+}
+function onRandomPlacement(mode: string, area?: { x1: number; y1: number; x2: number; y2: number }) {
+  const payload: any = { mode }
+  if (area) payload.area = area
+  wsSend({ type: 'random_placement', payload })
 }
 
 function onSetTurnOrder(order: string[]) {
@@ -935,6 +970,14 @@ onUnmounted(() => { disconnectWs() })
 :deep(.modal-body) .sheet-pick .meta { color: #666; font-size: 12px; margin-left: 8px; }
 :deep(.modal-body) .sheet-pick .prof { color: #0f3460; font-size: 12px; margin-left: 8px; }
 :deep(.modal-body) .sheet-pick .empty { color: #999; cursor: default; }
+:deep(.modal-body) .ranking-list { list-style: none; padding: 0; margin: 0; min-width: 300px; }
+:deep(.modal-body) .ranking-item { display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+:deep(.modal-body) .ranking-item .rank { width: 24px; height: 24px; line-height: 24px;
+  text-align: center; background: #0f3460; color: #fff; border-radius: 50%; font-size: 12px; }
+:deep(.modal-body) .ranking-item .name { flex: 1; color: #333; }
+:deep(.modal-body) .ranking-item .score { color: #6a3; font-weight: bold; }
+:deep(.modal-body) .ranking-item .status { color: #c33; font-size: 11px; }
 :deep(.modal-body) .loading { padding: 20px; color: #999; text-align: center; }
 :deep(.modal-body) .token-view { min-width: 320px; font-size: 13px; }
 :deep(.modal-body) .token-view .kv-row { display: flex; flex-wrap: wrap; gap: 4px 12px;

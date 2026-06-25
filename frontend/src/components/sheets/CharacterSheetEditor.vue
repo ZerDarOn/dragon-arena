@@ -120,7 +120,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { listMyCharacters, createCharacter, updateCharacter, deleteCharacter } from '../../api/rest'
+import { listMyCharacters, createCharacter, updateCharacter, deleteCharacter, uploadAvatar } from '../../api/rest'
 import type { CharacterSheet } from '../../api/types'
 import { equips } from '../../stores/resources'
 
@@ -340,17 +340,8 @@ async function onAvatarUpload(e: Event) {
   const file = input.files?.[0]
   if (!file || !editing.value) return
   uploading.value = true
-  const form = new FormData()
-  form.append('file', file)
   try {
-    const r = await fetch(`http://${window.location.hostname}:8000/api/upload/avatar`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${localStorage.getItem('dragon_arena_token') || ''}` },
-      body: form,
-    })
-    if (!r.ok) throw new Error('上传失败')
-    const data = await r.json()
-    editing.value.avatar_url = `http://${window.location.hostname}:8000${data.url}`
+    editing.value.avatar_url = await uploadAvatar(file)
   } catch (err) {
     error.value = '头像上传失败: ' + (err as Error).message
   } finally {

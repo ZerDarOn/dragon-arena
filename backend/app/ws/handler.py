@@ -261,7 +261,8 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                     tok_m = gs.room.tokens.get(tid_m)
                     if tok_m and _can_control(tok_m, user, player_id):
                         result = gs.token_svc.move_along_path(
-                            tid_m, [tuple(x) for x in p.get("path", [])])
+                            tid_m, [tuple(x) for x in p.get("path", [])],
+                            free_mode=getattr(gs.room.config, 'free_mode', False))
                         _log_event(gs, player_id, "move", target=tid_m,
                                    params={"path": p.get("path", [])}, result=result.model_dump())
                     await _broadcast_state(gs, room_id)
@@ -291,6 +292,13 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                     if existing and not _can_control(existing, user, player_id):
                         await connection_mgr.send_to_player(room_id, player_id, {
                             "type": "error", "payload": {"message": "该角色已被其他玩家占用"}
+                        })
+                        continue
+                    # 落子权限：非管理员且未开启自助落子时拒绝（自由模式豁免）
+                    if not is_admin and not getattr(gs.room.config, 'allow_player_placement', False) \
+                            and not getattr(gs.room.config, 'free_mode', False):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "落子已关闭，请等待 DM 安排"}
                         })
                         continue
                     character = p.get("character")
@@ -543,6 +551,81 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                         if gs.snapshot_storage:
                             gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
+                elif t == "set_player_placement":
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can toggle player placement"}
+                        })
+                        continue
+                    enabled = p.get("enabled", False)
+                    async with gs.lock:
+                        gs.room.config = gs.room.config.model_copy(
+                            update={"allow_player_placement": enabled}
+                        )
+                        _log_event(gs, player_id, "set_player_placement", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                    await _broadcast_state(gs, room_id)
+                elif t == "set_free_mode":
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can toggle free mode"}
+                        })
+                        continue
+                    enabled = p.get("enabled", False)
+                    async with gs.lock:
+                        gs.room.config = gs.room.config.model_copy(
+                            update={"free_mode": enabled}
+                        )
+                        # 自由模式同时取消回合时限
+                        if enabled:
+                            gs.cancel_turn_timer()
+                        _log_event(gs, player_id, "set_free_mode", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                    await _broadcast_state(gs, room_id)
+                elif t == "random_placement":
+                    # DM 一键随机落子：给所有未落子的玩家 token 分配随机位置
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can random placement"}
+                        })
+                        continue
+                    mode = p.get("mode", "all")  # all | area | edge
+                    async with gs.lock:
+                        placed = gs.token_svc.random_placement(
+                            mode=mode,
+                            area=p.get("area"),  # {x1,y1,x2,y2} for area mode
+                        )
+                        _log_event(gs, player_id, "random_placement",
+                                   params={"mode": mode, "placed": placed})
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                    await _broadcast_state(gs, room_id)
+                elif t == "remove_token":
+                    # 删除 token（自由模式或 DM 维护用）
+                    if not is_admin and not getattr(gs.room.config, 'free_mode', False):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin or free mode"}
+                        })
+                        continue
+                    tid_rm = p.get("token_id")
+                    if tid_rm and tid_rm in gs.room.tokens:
+                        async with gs.lock:
+                            del gs.room.tokens[tid_rm]
+                            # 清理 turn_order / current_actor 引用
+                            if tid_rm in gs.room.turn_order:
+                                gs.room.turn_order.remove(tid_rm)
+                            if gs.room.current_actor == tid_rm:
+                                gs.room.current_actor = None
+                            # 清理玩家绑定
+                            for pl in gs.room.players.values():
+                                if pl.token_id == tid_rm:
+                                    pl.token_id = None
+                            _log_event(gs, player_id, "remove_token", target=tid_rm)
+                            if gs.snapshot_storage:
+                                gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                        await _broadcast_state(gs, room_id)
                 elif t == "set_poison_circle":
                     if not is_admin:
                         await connection_mgr.send_to_player(room_id, player_id, {
@@ -576,6 +659,9 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "cannot control attacker"}
                         })
                         continue
+                    # 自由模式：补足 AP 让攻击不被 AP 不足拦截
+                    if getattr(gs.room.config, 'free_mode', False) and attacker.ap < 1:
+                        attacker.ap = max(attacker.ap, attacker.max_ap)
                     # 注册默认攻击规则（如果还没有）
                     if attacker_id not in gs.combat_engine.rules:
                         gs._register_default_attack_rules(attacker)
@@ -614,13 +700,15 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "cannot control token"}
                         })
                         continue
-                    if token.ap < gs.room.config.defend_ap_cost:
+                    if token.ap < gs.room.config.defend_ap_cost and not getattr(gs.room.config, 'free_mode', False):
                         await connection_mgr.send_to_player(room_id, player_id, {
                             "type": "error", "payload": {"message": "AP不足"}
                         })
                         continue
                     async with gs.lock:
-                        token.ap -= gs.room.config.defend_ap_cost
+                        # 自由模式不消耗 AP
+                        if not getattr(gs.room.config, 'free_mode', False):
+                            token.ap -= gs.room.config.defend_ap_cost
                         # 察觉检定：D20 + 被动觉察
                         r = roll_dice(sides=20, modifier=token.passive_perception - 10)
                         _log_event(gs, player_id, "defend", target=token_id, params={"roll": r.model_dump(), "ap_after": token.ap})
@@ -641,19 +729,24 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "cannot control token"}
                         })
                         continue
-                    if token.ap < gs.room.config.sprint_ap_cost:
+                    is_free = getattr(gs.room.config, 'free_mode', False)
+                    if token.ap < gs.room.config.sprint_ap_cost and not is_free:
                         await connection_mgr.send_to_player(room_id, player_id, {
                             "type": "error", "payload": {"message": "AP不足（疾跑需2AP）"}
                         })
                         continue
-                    if len(path) > gs.room.config.sprint_distance:
+                    if len(path) > gs.room.config.sprint_distance and not is_free:
                         await connection_mgr.send_to_player(room_id, player_id, {
                             "type": "error", "payload": {"message": f"疾跑最多{gs.room.config.sprint_distance}格"}
                         })
                         continue
                     async with gs.lock:
-                        token.ap -= gs.room.config.sprint_ap_cost
-                        result = gs.token_svc.move_along_path(token_id, [tuple(x) for x in path])
+                        if not is_free:
+                            token.ap -= gs.room.config.sprint_ap_cost
+                        # 疾跑是"扣固定 sprint_ap_cost 走最多 sprint_distance 格"，AP 已在上面扣过；
+                        # 这里让 move_along_path 只做几何/墙/占位校验并移动，不要再按格扣一次 AP
+                        # （否则会二次扣费，且常常因 AP 归零被自己的内部检查挡下导致疾跑失败）。
+                        result = gs.token_svc.move_along_path(token_id, [tuple(x) for x in path], free_mode=True)
                         _log_event(gs, player_id, "sprint", target=token_id, params={"path": path, "ap_after": token.ap})
                         if gs.snapshot_storage:
                             gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())

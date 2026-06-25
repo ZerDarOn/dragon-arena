@@ -46,6 +46,10 @@ class RoomConfig(BaseModel):
     ap_regen: int = 2
 
     fog_of_war_enabled: bool = True
+    # 落子权限：False=DM 统一控制落子（默认），True=玩家可自助落子
+    allow_player_placement: bool = False
+    # 自由模式：测试用。忽略 AP/回合/落子等所有规则限制
+    free_mode: bool = False
     # Poison Circle
     poison_circle_radius: int = 15  # 初始半径，随回合收缩
     poison_circle_damage_base: int = 5

@@ -33,6 +33,12 @@
 
     <!-- 当前行动者 -->
     <button v-if="isCurrentActor" class="end-turn" @click="endTurn">结束我的回合</button>
+
+    <!-- 管理员强制结束当前回合 -->
+    <button v-if="auth.isAdmin && room.room?.current_actor && !isCurrentActor"
+            class="force-end-turn" @click="endTurn">
+      强制结束回合
+    </button>
   </div>
 </template>
 

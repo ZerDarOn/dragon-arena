@@ -1,9 +1,10 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 from pydantic import BaseModel
 from app.schemas.room import Room, Token, StateTag
 from app.schemas.map import GameMap
 from app.services.geometry_service import angle_to_direction
 from app.services.map_service import MapService
+import random
 
 
 class MoveResult(BaseModel):
@@ -56,7 +57,8 @@ class TokenService:
             tok.owner_id = character.get("owner_id")
         return True
 
-    def move_along_path(self, token_id: str, path: List[Tuple[int, int]]) -> MoveResult:
+    def move_along_path(self, token_id: str, path: List[Tuple[int, int]],
+                        free_mode: bool = False) -> MoveResult:
         token = self.room.tokens.get(token_id)
         if not token or not token.position:
             return MoveResult(success=False, reason="token has no position")
@@ -83,10 +85,11 @@ class TokenService:
             ap_needed += self.cfg.move_ap_cost
             cur = step
 
-        if token.ap < ap_needed:
+        if not free_mode and token.ap < ap_needed:
             return MoveResult(success=False, reason=f"insufficient AP: need {ap_needed}, have {token.ap}")
 
-        token.ap -= ap_needed
+        if not free_mode:
+            token.ap -= ap_needed
         if path:
             last = path[-1]
             token.position = {"x": last[0], "y": last[1]}
@@ -132,3 +135,81 @@ class TokenService:
         if not token:
             return
         token.states = [s for s in token.states if s.id != state_id]
+
+    # ------------------------------------------------------------------
+    # 随机落子：DM 一键给所有无位置的玩家 token 分配坐标
+    # ------------------------------------------------------------------
+    def _occupied_cells(self) -> set:
+        """已占用的格子集合（非死亡 token）"""
+        return {(t.position["x"], t.position["y"])
+                for t in self.room.tokens.values()
+                if t.position and not t.is_dead}
+
+    def _walkable_cells(self, area: Optional[Dict[str, int]] = None) -> List[Tuple[int, int]]:
+        """返回可通行格列表（非墙、非占用）"""
+        occupied = self._occupied_cells()
+        cells = []
+        if area:
+            x1, y1 = area.get("x1", 0), area.get("y1", 0)
+            x2, y2 = area.get("x2", self.cfg.map_width), area.get("y2", self.cfg.map_height)
+        else:
+            x1, y1 = 0, 0
+            x2, y2 = self.cfg.map_width, self.cfg.map_height
+        for x in range(max(0, x1), min(self.cfg.map_width, x2)):
+            for y in range(max(0, y1), min(self.cfg.map_height, y2)):
+                if self.map_svc.is_wall(x, y):
+                    continue
+                if (x, y) in occupied:
+                    continue
+                cells.append((x, y))
+        return cells
+
+    def _edge_cells(self) -> List[Tuple[int, int]]:
+        """地图边缘格（外圈 2 格），用于吃鸡式开局分布"""
+        occupied = self._occupied_cells()
+        cells = []
+        w, h = self.cfg.map_width, self.cfg.map_height
+        for x in range(w):
+            for y in range(h):
+                # 外圈 2 格
+                if min(x, y, w - 1 - x, h - 1 - y) >= 2:
+                    continue
+                if self.map_svc.is_wall(x, y):
+                    continue
+                if (x, y) in occupied:
+                    continue
+                cells.append((x, y))
+        return cells
+
+    def random_placement(self, mode: str = "all",
+                         area: Optional[Dict[str, int]] = None) -> List[str]:
+        """给所有 position 为空的 token 随机分配坐标。
+
+        mode:
+          - all:  全图随机
+          - area: 指定矩形区域随机（需提供 area={x1,y1,x2,y2}）
+          - edge: 边缘分布（吃鸡开局）
+        返回已放置的 token_id 列表。
+        """
+        # 候选 token：有 owner、无 position、非死亡
+        candidates = [t for t in self.room.tokens.values()
+                      if t.owner_id and not t.position and not t.is_dead]
+        if not candidates:
+            return []
+
+        if mode == "edge":
+            pool = self._edge_cells()
+        elif mode == "area":
+            pool = self._walkable_cells(area)
+        else:
+            pool = self._walkable_cells()
+
+        random.shuffle(pool)
+        placed = []
+        for tok in candidates:
+            if not pool:
+                break
+            x, y = pool.pop()
+            tok.position = {"x": x, "y": y}
+            placed.append(tok.id)
+        return placed

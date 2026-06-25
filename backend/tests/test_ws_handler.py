@@ -72,18 +72,24 @@ def test_place_token_cannot_steal_others_token(client, auth_setup, ws_room):
 
 def test_place_token_non_admin_cannot_spoof_owner(client, auth_setup, ws_room):
     """非管理员伪造 character.owner_id 也没用，token 归属永远是发消息的人自己。"""
+    admin_token = auth_setup["admin_token"]
     user_token = auth_setup["user_token"]
     admin_id = auth_setup["admin_id"]
     user_id = auth_setup["user_id"]
-    with client.websocket_connect(f"/ws/{ws_room}?token={user_token}") as ws:
-        ws.receive_json()
-        ws.send_json({"type": "place_token", "payload": {
-            "token_id": "tok_x", "x": 3, "y": 3,
-            "character": {"name": "冒充", "owner_id": admin_id},
-        }})
-        msg = ws.receive_json()
-        token = msg["payload"]["tokens"]["tok_x"]
-        assert token["owner_id"] == user_id
+    with client.websocket_connect(f"/ws/{ws_room}?token={admin_token}") as ws_admin:
+        ws_admin.receive_json()
+        # 测试需要玩家自助落子权限
+        ws_admin.send_json({"type": "set_player_placement", "payload": {"enabled": True}})
+        ws_admin.receive_json()
+        with client.websocket_connect(f"/ws/{ws_room}?token={user_token}") as ws:
+            ws.receive_json()
+            ws.send_json({"type": "place_token", "payload": {
+                "token_id": "tok_x", "x": 3, "y": 3,
+                "character": {"name": "冒充", "owner_id": admin_id},
+            }})
+            msg = ws.receive_json()
+            token = msg["payload"]["tokens"]["tok_x"]
+            assert token["owner_id"] == user_id
 
 
 def test_admin_can_place_token_on_behalf_of_player(client, auth_setup, ws_room):
@@ -105,3 +111,29 @@ def test_admin_can_place_token_on_behalf_of_player(client, auth_setup, ws_room):
             assert token["owner_id"] == user_id
             assert token["character_name"] == "代摆放"
             assert msg["payload"]["players"][user_id]["token_id"] == "tok_proxy"
+
+
+def test_sprint_moves_and_costs_only_sprint_ap(auth_client, auth_setup, ws_room):
+    """回归：疾跑应真正移动、且只扣一次 sprint_ap_cost。
+
+    曾经 sprint 先扣 sprint_ap_cost，又让 move_along_path 按格再扣一次 AP；
+    AP 归零后 move_along_path 自己的 AP 检查把移动挡下 → 疾跑根本不动。
+    修复后 move_along_path 以 free_mode 调用，只做几何校验+移动，不再二次扣 AP。
+    """
+    token = auth_setup["admin_token"]
+    with auth_client.websocket_connect(f"/ws/{ws_room}?token={token}") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "place_token", "payload": {"token_id": "tok_sp", "x": 1, "y": 1}})
+        msg = ws.receive_json()
+        tok = msg["payload"]["tokens"]["tok_sp"]
+        ap0 = tok["ap"]
+        sprint_cost = msg["payload"]["config"]["sprint_ap_cost"]
+        assert ap0 >= sprint_cost  # 前置：有足够 AP 起跑
+        # 直线疾跑 4 格
+        ws.send_json({"type": "sprint", "payload": {
+            "token_id": "tok_sp", "path": [[2, 1], [3, 1], [4, 1], [5, 1]],
+        }})
+        msg2 = ws.receive_json()
+        moved = msg2["payload"]["tokens"]["tok_sp"]
+        assert moved["position"] == {"x": 5, "y": 1}, "疾跑应真正移动到路径终点"
+        assert moved["ap"] == ap0 - sprint_cost, "疾跑只该扣一次 sprint_ap_cost"
