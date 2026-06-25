@@ -68,6 +68,7 @@ const props = defineProps<{
   bgImage?: string      // 底图 dataURL
   bgOpacity?: number    // 0-1
   combatMode?: 'attack' | 'sprint' | null  // 战斗模式
+  attackTargets?: string[]                 // 已选中的攻击目标 token id（多选）
 }>()
 const emit = defineEmits<{
   (e: 'path-committed', path: [number, number][]): void
@@ -453,6 +454,17 @@ function drawTokens(ctx: CanvasRenderingContext2D) {
       ctx.strokeRect(t.position.x * CELL - 1, t.position.y * CELL - 1, CELL * tkSize + 2, CELL * tkSize + 2)
     }
 
+    // 攻击目标标记：实心红准星（多选）
+    if (props.attackTargets?.includes(t.id)) {
+      const rr = (CELL * tkSize) / 2 + 3
+      ctx.strokeStyle = 'rgba(220, 30, 30, 0.95)'; ctx.lineWidth = 3; ctx.setLineDash([])
+      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke()
+      ctx.beginPath()
+      ctx.moveTo(cx - rr, cy); ctx.lineTo(cx + rr, cy)
+      ctx.moveTo(cx, cy - rr); ctx.lineTo(cx, cy + rr)
+      ctx.stroke()
+    }
+
     const avatarImg = t.avatar_url ? avatarCache.value[t.avatar_url] : null
     const r = (CELL / 2.5) * tkSize
     if (avatarImg && avatarImg.complete) {
@@ -564,20 +576,14 @@ function drawPoisonCircle(ctx: CanvasRenderingContext2D) {
   const boardH = cfg.map_height * CELL
 
   ctx.save()
-  // 圈外（毒圈）淡红——用 even-odd 在棋盘范围内挖掉安全圈，染剩下的危险区
-  ctx.fillStyle = 'rgba(180, 30, 30, 0.16)'
+  // 圈内不染色；只把圈外（毒圈）染很淡的红，加一圈虚线边界即可分辨
+  ctx.fillStyle = 'rgba(190, 40, 40, 0.10)'
   ctx.beginPath()
   ctx.rect(0, 0, boardW, boardH)
   ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.fill('evenodd')
-  // 圈内（安全区）极淡绿
-  ctx.beginPath()
-  ctx.arc(cx, cy, r, 0, Math.PI * 2)
-  ctx.fillStyle = 'rgba(60, 200, 120, 0.05)'
-  ctx.fill()
-  // 安全区边界：醒目红色虚线
-  ctx.strokeStyle = 'rgba(220, 40, 40, 0.9)'
-  ctx.lineWidth = 3
+  ctx.strokeStyle = 'rgba(210, 60, 60, 0.7)'
+  ctx.lineWidth = 2
   ctx.setLineDash([10, 6])
   ctx.beginPath()
   ctx.arc(cx, cy, r, 0, Math.PI * 2)

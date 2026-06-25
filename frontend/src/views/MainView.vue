@@ -103,6 +103,15 @@
               <button @click="clearBgImage">移除底图</button>
             </template>
           </div>
+          <!-- 攻击多选目标条 -->
+          <div v-if="combatMode === 'attack'" class="attack-bar">
+            <span class="ab-hint">点击敌方棋子选为目标（可多选）</span>
+            <span class="ab-count">已选 {{ attackTargets.length }}</span>
+            <button class="ab-confirm" :disabled="!attackTargets.length" @click="confirmAttack">
+              攻击选中目标
+            </button>
+            <button class="ab-cancel" @click="cancelAttack">取消</button>
+          </div>
           <div class="canvas-wrap" :class="{ 'placing-mode': !!selectedCharacter && !selfTokenId }">
             <GameCanvas v-if="room.room"
                         ref="canvasRef"
@@ -123,6 +132,7 @@
                         @token-rotate="onTokenRotate"
                         @token-size="onTokenSize"
                         :combat-mode="combatMode"
+                        :attack-targets="attackTargets"
                         @token-dblclick="onTokenDblClick"
                         @spawn-actor="onSpawnActor"
                         @spawn-sheet="onSpawnSheet" />
@@ -466,12 +476,40 @@ function applyOptimisticUpdate(msg: any) {
   }
 }
 
+// 攻击目标（多选）
+const attackTargets = ref<string[]>([])
+
 function onCombatMode(mode: 'attack' | 'sprint' | null) {
   combatMode.value = mode
+  if (mode !== 'attack') attackTargets.value = []
 }
 
 function onAttackTarget(targetId: string) {
-  combatRef.value?.onTargetSelected(targetId)
+  toggleAttackTarget(targetId)
+}
+
+function toggleAttackTarget(id: string) {
+  const i = attackTargets.value.indexOf(id)
+  if (i >= 0) attackTargets.value.splice(i, 1)
+  else attackTargets.value.push(id)
+}
+
+function confirmAttack() {
+  const attacker = selfTokenId.value
+  if (!attacker || !attackTargets.value.length) return
+  // 逐个目标发起攻击（每次消耗 1AP，后端按规则校验，AP 不足会被拒）
+  for (const tid of attackTargets.value) {
+    wsSend({ type: 'attack', payload: { attacker_id: attacker, defender_id: tid } })
+  }
+  attackTargets.value = []
+  combatMode.value = null
+  combatRef.value?.setMode(null)
+}
+
+function cancelAttack() {
+  attackTargets.value = []
+  combatMode.value = null
+  combatRef.value?.setMode(null)
 }
 
 function onSheetEdit(sheet: any) {
@@ -738,11 +776,11 @@ function onPath(path: [number, number][]) {
 }
 
 function onTokenSelected(t: any) {
-  // 攻击模式：点击敌方 token 发起攻击
+  // 攻击模式：点击敌方 token 切换为目标（可多选），不立即攻击
   if (combatMode.value === 'attack') {
     const selfId = selfTokenId.value
     if (t.id !== selfId && !t.is_dead) {
-      combatRef.value?.onTargetSelected(t.id)
+      toggleAttackTarget(t.id)
     }
     return
   }
@@ -918,6 +956,15 @@ onUnmounted(() => { disconnectWs() })
 .center-panel { display: flex; flex-direction: column; min-width: 0; }
 .canvas-wrap { flex: 1; overflow: auto; padding: 8px; background: #eee; }
 .canvas-wrap.placing-mode { cursor: crosshair; }
+.attack-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px;
+  background: #2a1010; color: #fff; border-bottom: 1px solid #500; font-size: 13px; }
+.attack-bar .ab-hint { color: #f99; }
+.attack-bar .ab-count { color: #fa0; font-weight: bold; }
+.attack-bar .ab-confirm { margin-left: auto; padding: 4px 14px; background: #c33; color: #fff;
+  border: none; border-radius: 3px; cursor: pointer; font-weight: bold; }
+.attack-bar .ab-confirm:disabled { background: #633; cursor: not-allowed; opacity: 0.6; }
+.attack-bar .ab-cancel { padding: 4px 12px; background: #444; color: #fff; border: none;
+  border-radius: 3px; cursor: pointer; }
 .bg-toolbar { display: flex; align-items: center; gap: 12px;
   padding: 6px 10px; background: #f0f0f0; border-bottom: 1px solid #ccc; font-size: 12px; }
 .bg-toolbar .bg-btn { padding: 4px 10px; background: #0f3460; color: #fff;

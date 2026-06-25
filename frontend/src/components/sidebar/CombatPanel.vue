@@ -42,11 +42,7 @@
     <div v-else-if="!isMyTurn" class="hint wait">等待回合…</div>
     <div v-else class="hint">未落子</div>
 
-    <!-- 目标提示 -->
-    <div v-if="mode === 'attack'" class="mode-hint">
-      点击敌方棋子进行攻击（消耗1AP）
-      <button class="cancel" @click="mode = null">取消</button>
-    </div>
+    <!-- 攻击目标选择在地图上方的目标条进行（支持多选）。这里只显示疾跑提示 -->
     <div v-if="mode === 'sprint'" class="mode-hint">
       在棋盘上拖动路径疾跑（最多{{ room?.config?.sprint_distance ?? 4 }}格）
       <button class="cancel" @click="mode = null">取消</button>
