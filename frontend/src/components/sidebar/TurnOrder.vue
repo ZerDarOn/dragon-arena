@@ -43,7 +43,7 @@ const orderWithNames = computed(() => {
   return (r.turn_order || []).map((tid, idx) => {
     const tok = r.tokens[tid]
     const ownerEntry = Object.values(r.players).find((p: any) => p.token_id === tid)
-    const label = tok?.character_name || tok?.name || ownerEntry?.nickname || tid
+    const label = tok?.character_name || ownerEntry?.nickname || tid
     return {
       id: tid, idx, label,
       isMe: tid === selfToken,

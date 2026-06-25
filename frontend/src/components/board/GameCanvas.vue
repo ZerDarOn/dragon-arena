@@ -70,13 +70,13 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   (e: 'path-committed', path: [number, number][]): void
-  (e: 'cell-click', cell: { x: number; y: number }): void
+  (e: 'cell-click', cell: { x: number; y: number; action?: string }): void
   (e: 'token-selected', token: any): void
   (e: 'token-rotate', tokenId: string, facing: number): void
-  (e: 'token-scale', tokenId: string, size: number): void
+  (e: 'token-size', tokenId: string, size: number): void
   (e: 'token-dblclick', token: any): void
   (e: 'spawn-actor', payload: { actor_id: string; x: number; y: number }): void
-  (e: 'spawn-sheet', payload: { sheet_id: string; x: number; y: number }): void
+  (e: 'spawn-sheet', payload: { sheet: any; x: number; y: number }): void
 }>()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -561,7 +561,7 @@ function onDrop(e: DragEvent) {
     if (data.kind === 'actor') {
       emit('spawn-actor', { actor_id: data.actor_id, x, y })
     } else if (data.kind === 'character_sheet') {
-      emit('spawn-sheet', { sheet_id: data.sheet_id, x, y })
+      emit('spawn-sheet', { sheet: data.sheet, x, y })
     } else {
       console.warn('[onDrop] unknown kind', data.kind)
     }

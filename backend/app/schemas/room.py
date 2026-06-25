@@ -41,6 +41,8 @@ class Token(BaseModel):
     is_hidden: bool = False
     size: int = 1  # 占格大小 1-4
     avatar_url: Optional[str] = None  # 头像 URL（base64 或外部链接）
+    is_shop: bool = False          # 是否是商店型 NPC
+    shop_items: List[str] = Field(default_factory=list)  # 货架上的道具名（对应 Item.name）
 
 
 class Player(BaseModel):

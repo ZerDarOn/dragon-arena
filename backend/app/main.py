@@ -15,6 +15,7 @@ from app.services.user_storage import UserStorage
 from app.deps import user_storage, get_current_user, require_admin, get_current_user_ws
 from app.ws.handler import handle_ws_connection
 from app.schemas.actor import ActorCreate, ActorUpdate
+from app.schemas.item import ItemCreate, ItemUpdate
 
 app = FastAPI(title="Dragon Arena")
 app.add_middleware(
@@ -144,7 +145,7 @@ async def create_character(req: CreateCharacterRequest, user: User = Depends(get
     import time, uuid
     sheet = CharacterSheet(
         id=str(uuid.uuid4()), owner_id=user.id,
-        name=req.name, gender=req.gender, profession=req.profession, talent=req.talent,
+        name=req.name, avatar_url=req.avatar_url, gender=req.gender, profession=req.profession, talent=req.talent,
         hp_base=req.hp_base, armor_base=req.armor_base, ap_base=req.ap_base,
         gold=req.gold, backpack=req.backpack,
         equipment_slots=req.equipment_slots, skill_slots=req.skill_slots,
@@ -166,6 +167,7 @@ async def update_character(sheet_id: str, req: CreateCharacterRequest,
     if sheet.owner_id != user.id:
         raise HTTPException(403, "not owner")
     sheet.name = req.name
+    sheet.avatar_url = req.avatar_url
     sheet.gender = req.gender
     sheet.profession = req.profession
     sheet.talent = req.talent
@@ -213,7 +215,7 @@ async def get_character(sheet_id: str, user: User = Depends(get_current_user)):
 
 @app.post("/rooms")
 async def create_room(req: CreateRoomReq, user: User = Depends(get_current_user)):
-    return room_service.create_room(name=req.name, host_id=user.id).model_dump()
+    return room_service.create_room(name=req.name, host_id=user.id, host_nickname=user.nickname).model_dump()
 
 
 @app.get("/rooms")
@@ -262,6 +264,33 @@ async def update_actor(actor_id: str, req: ActorUpdate):
 async def delete_actor(actor_id: str):
     if not user_storage.delete_actor(actor_id):
         raise HTTPException(404, "actor not found")
+    return {"ok": True}
+
+
+# ---- Item Library (道具库) ----
+
+@app.get("/api/items", dependencies=[Depends(get_current_user)])
+async def list_items(category: Optional[str] = None):
+    return user_storage.list_items(category=category)
+
+
+@app.post("/api/items", dependencies=[Depends(require_admin)])
+async def create_item(req: ItemCreate):
+    return user_storage.create_item(req)
+
+
+@app.put("/api/items/{item_id}", dependencies=[Depends(require_admin)])
+async def update_item(item_id: str, req: ItemUpdate):
+    item = user_storage.update_item(item_id, req)
+    if not item:
+        raise HTTPException(404, "item not found")
+    return item
+
+
+@app.delete("/api/items/{item_id}", dependencies=[Depends(require_admin)])
+async def delete_item(item_id: str):
+    if not user_storage.delete_item(item_id):
+        raise HTTPException(404, "item not found")
     return {"ok": True}
 
 

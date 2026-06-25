@@ -8,12 +8,12 @@ export type ServerMessage =
 
 export type ClientMessage =
   | { type: 'chat'; payload: { channel: string; text: string; target_player?: string } }
-  | { type: 'dice_roll'; payload: { sides: number; modifier?: number } }
+  | { type: 'dice_roll'; payload: { expression: string } }
   | { type: 'move'; payload: { token_id: string; path: [number, number][] } }
   | { type: 'modify_value'; payload: { token_id: string; field: string; delta: number } }
   | { type: 'add_state'; payload: { token_id: string; name: string; description: string; ttl: number } }
   | { type: 'place_token'; payload: { token_id: string; x: number; y: number; character?: any } }
-  | { type: 'place_unit'; payload: { unit_type: string; name: string; hp: number; armor: number; x: number; y: number; darkvision?: boolean; vision_range?: number; listen_radius?: number; passive_perception?: number; stealth?: number } }
+  | { type: 'place_unit'; payload: { unit_type: string; name: string; hp: number; armor: number; x: number; y: number; darkvision?: boolean; vision_range?: number; listen_radius?: number; passive_perception?: number; stealth?: number; is_shop?: boolean; shop_items?: string[] } }
   | { type: 'rotate_token'; payload: { token_id: string; facing: number } }
   | { type: 'size_token'; payload: { token_id: string; size: number } }
   | { type: 'attack'; payload: { attacker_id: string; defender_id: string } }
@@ -33,18 +33,68 @@ export type ClientMessage =
   | { type: 'shuffle_turn_order'; payload: Record<string, never> }
   | { type: 'start_game'; payload: Record<string, never> }
   | { type: 'spawn_token'; payload: { actor_id: string; x: number; y: number } }
+  | { type: 'buy_item'; payload: { buyer_token_id: string; shop_token_id: string; item_name: string } }
+
+export type ConnectionStatus = 'connecting' | 'open' | 'reconnecting' | 'closed'
+
+const MAX_RECONNECT_DELAY_MS = 10000
 
 export class WSClient {
   private ws: WebSocket | null = null
   private listeners: ((msg: ServerMessage) => void)[] = []
+  private statusListeners: ((status: ConnectionStatus) => void)[] = []
+  private roomId = ''
+  private token = ''
+  private closedByUser = false
+  private reconnectAttempt = 0
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   connect(roomId: string, token: string) {
-    this.ws = new WebSocket(`ws://${window.location.hostname}:8000/ws/${roomId}?token=${encodeURIComponent(token)}`)
-    this.ws.onmessage = (ev) => {
+    this.roomId = roomId
+    this.token = token
+    this.closedByUser = false
+    this.reconnectAttempt = 0
+    this._open()
+  }
+
+  private _open() {
+    this._setStatus(this.reconnectAttempt > 0 ? 'reconnecting' : 'connecting')
+    const ws = new WebSocket(
+      `ws://${window.location.hostname}:8000/ws/${this.roomId}?token=${encodeURIComponent(this.token)}`,
+    )
+    this.ws = ws
+    ws.onmessage = (ev) => {
       this.listeners.forEach((l) => l(JSON.parse(ev.data)))
     }
+    ws.onopen = () => {
+      this.reconnectAttempt = 0
+      this._setStatus('open')
+    }
+    ws.onclose = () => {
+      if (this.closedByUser) {
+        this._setStatus('closed')
+        return
+      }
+      // 意外断开（服务器重启/网络波动/后端异常）：自动重连，指数退避
+      this._setStatus('reconnecting')
+      const delay = Math.min(1000 * 2 ** this.reconnectAttempt, MAX_RECONNECT_DELAY_MS)
+      this.reconnectAttempt += 1
+      this.reconnectTimer = setTimeout(() => this._open(), delay)
+    }
+    ws.onerror = () => {
+      // onclose 会紧跟着触发并处理重连，这里只是让错误不会变成未捕获的控制台异常
+    }
   }
+
   send(msg: ClientMessage) { this.ws?.send(JSON.stringify(msg)) }
   onMessage(l: (msg: ServerMessage) => void) { this.listeners.push(l) }
-  close() { this.ws?.close(); this.ws = null }
+  onStatus(l: (status: ConnectionStatus) => void) { this.statusListeners.push(l) }
+  private _setStatus(s: ConnectionStatus) { this.statusListeners.forEach((l) => l(s)) }
+
+  close() {
+    this.closedByUser = true
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
+    this.ws?.close()
+    this.ws = null
+  }
 }

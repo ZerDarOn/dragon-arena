@@ -6,16 +6,16 @@ import { useSelfStore } from './self'
 
 export const useChatStore = defineStore('chat', () => {
   const hall = ref<ChatMessage[]>([])
+  // "battle" 是后端 ChatService 真正认识的频道名（对应"战役大厅"标签）。
+  // 之前前端单独发明了一个 "campaign_hall"，后端从来没认识过，消息发了就消失。
   const battle = ref<ChatMessage[]>([])
   const privateChats = ref<Record<string, ChatMessage[]>>({})
   const inbox = ref<ChatMessage[]>([])
-  const campaignHall = ref<ChatMessage[]>([])
   const warHall = ref<ChatMessage[]>([])
 
   function addMessage(msg: ChatMessage) {
     const self = useSelfStore()
     if (msg.channel === 'hall') hall.value.push(msg)
-    else if (msg.channel === 'campaign_hall') campaignHall.value.push(msg)
     else if (msg.channel === 'war_hall') warHall.value.push(msg)
     else if (msg.channel === 'battle') battle.value.push(msg)
     else if (msg.channel === 'private') {
@@ -34,5 +34,5 @@ export const useChatStore = defineStore('chat', () => {
     return Object.keys(privateChats.value)
   }
 
-  return { hall, battle, privateChats, inbox, campaignHall, warHall, addMessage, getPrivateMessages, getAllPrivatePartners }
+  return { hall, battle, privateChats, inbox, warHall, addMessage, getPrivateMessages, getAllPrivatePartners }
 })

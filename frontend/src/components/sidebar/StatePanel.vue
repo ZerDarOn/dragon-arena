@@ -1,9 +1,9 @@
 <template>
   <div class="state-panel">
-    <h3>状态 <span v-if="token" class="target">→ {{ token.id }}</span></h3>
+    <h3>状态 <span v-if="token" class="target">→ {{ displayName(token) }}</span></h3>
     <select v-if="!token && isAdmin" v-model="tokenId">
       <option value="">选择目标...</option>
-      <option v-for="t in tokens" :key="t.id" :value="t.id">{{ t.id }}</option>
+      <option v-for="t in tokens" :key="t.id" :value="t.id">{{ displayName(t) }}</option>
     </select>
     <ul class="states">
       <li v-for="s in states" :key="s.id" :class="stateClass(s.name)">
@@ -38,6 +38,10 @@ const name = ref(''); const description = ref(''); const ttl = ref(1)
 
 const targetId = computed(() => props.token?.id ?? tokenId.value)
 const states = computed(() => room.room?.tokens[targetId.value]?.states ?? [])
+
+function displayName(t: any): string {
+  return t?.character_name || t?.type || t?.id || '?'
+}
 
 function add() {
   if (!targetId.value || !name.value) return

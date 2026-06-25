@@ -1,7 +1,7 @@
 import { useAuthStore } from '../stores/auth'
 import type { Actor, ActorCreate, ActorUpdate } from './types'
 
-const API = 'http://localhost:8000'
+const API = `http://${window.location.hostname}:8000`
 
 function authHeaders(): Record<string, string> {
   const auth = useAuthStore()

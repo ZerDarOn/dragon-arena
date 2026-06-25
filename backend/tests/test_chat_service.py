@@ -62,3 +62,22 @@ def test_dead_cannot_hear_spatial(setup):
     room.tokens["t2"].is_dead = True
     msg = svc.send("p1", "spatial_normal", text="hi")
     assert "p2" not in msg.recipients
+
+
+def test_war_hall_admin_only(setup):
+    svc, room = setup
+    msg = svc.send("p1", "war_hall", text="announcement", is_admin=True)
+    assert msg is not None
+    assert msg.recipients is None  # 广播给所有人
+
+
+def test_war_hall_rejects_non_admin(setup):
+    svc, room = setup
+    msg = svc.send("p1", "war_hall", text="i am not admin", is_admin=False)
+    assert msg is None
+
+
+def test_battle_broadcast(setup):
+    svc, room = setup
+    msg = svc.send("p1", "battle", text="for the war room")
+    assert msg.recipients is None

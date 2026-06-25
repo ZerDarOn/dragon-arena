@@ -74,7 +74,7 @@ const unreadCounts = computed(() => {
 
 function getMessages(key: string) {
   if (key === 'hall') return chat.hall
-  if (key === 'campaign_hall') return chat.campaignHall
+  if (key === 'battle') return chat.battle
   if (key === 'war_hall') return chat.warHall
   if (key === 'spatial') return chat.inbox
   if (key === 'private') {
@@ -96,7 +96,7 @@ watch(privateTarget, () => {
 
 // 新消息到来时，如果不在当前频道，自动计数
 watch(() => chat.hall.length, () => { if (activeTab.value !== 'hall') {/* 已由 unreadCounts 自动计算 */} })
-watch(() => chat.campaignHall.length, () => { if (activeTab.value !== 'campaign_hall') {} })
+watch(() => chat.battle.length, () => { if (activeTab.value !== 'battle') {} })
 watch(() => chat.warHall.length, () => { if (activeTab.value !== 'war_hall') {} })
 watch(() => chat.inbox.length, () => { if (activeTab.value !== 'spatial') {} })
 watch(() => chat.privateChats, () => {
@@ -106,7 +106,7 @@ watch(() => chat.privateChats, () => {
 const ALL_CHANNELS: ChannelDef[] = [
   { key: 'hall', label: '大厅' },
   { key: 'private', label: '私聊' },
-  { key: 'campaign_hall', label: '战役大厅' },
+  { key: 'battle', label: '战役大厅' },
   { key: 'spatial', label: '空间' },
   { key: 'war_hall', label: '战争大厅' },
 ]
@@ -147,7 +147,7 @@ const visibleChannels = computed<ChannelDef[]>(() => {
 const currentMessages = computed(() => {
   const key = activeTab.value
   if (key === 'hall') return chat.hall
-  if (key === 'campaign_hall') return chat.campaignHall
+  if (key === 'battle') return chat.battle
   if (key === 'war_hall') return chat.warHall
   if (key === 'spatial') return chat.inbox
   if (key === 'private') {

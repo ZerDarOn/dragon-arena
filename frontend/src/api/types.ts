@@ -10,7 +10,8 @@ export interface LoginResponse {
 // ---- Character Sheets ----
 export interface CharacterSheet {
   id: string; owner_id: string
-  name: string; gender: string; profession: string; talent: string
+  name: string; avatar_url?: string | null
+  gender: string; profession: string; talent: string
   hp_base: number; armor_base: number; ap_base: number
   gold: number; backpack: string[]
   equipment_slots: (string | null)[]; skill_slots: (string | null)[]
@@ -69,6 +70,8 @@ export interface Token {
   character_name?: string
   avatar_url?: string  // 头像 URL（base64 或外部链接）
   item_charges?: Record<string, number>  // 道具剩余次数
+  is_shop?: boolean
+  shop_items?: string[]
 }
 
 export interface Player {
@@ -118,7 +121,14 @@ export interface CombatLog {
   }>
 }
 
+export interface DieRoll { sides: number; value: number; kept: boolean }
+export interface DiceGroup {
+  count: number; sides: number; keep?: 'h' | 'l' | null; keep_n?: number | null
+  sign: number; rolls: DieRoll[]
+}
 export interface DiceResult {
+  expression: string
+  groups: DiceGroup[]
   value: number; modifier: number; total: number
   crit_success: boolean; crit_fail: boolean; sides: number
 }
@@ -135,6 +145,7 @@ export interface Actor {
   passive_perception: number; stealth: number
   equipment_slots: (string | null)[]; skill_slots: (string | null)[]
   backpack: string[]
+  is_shop: boolean; shop_items: string[]
   created_at: number; updated_at: number
 }
 
@@ -147,6 +158,7 @@ export interface ActorCreate {
   passive_perception?: number; stealth?: number
   equipment_slots?: (string | null)[]; skill_slots?: (string | null)[]
   backpack?: string[]
+  is_shop?: boolean; shop_items?: string[]
 }
 
 export interface ActorUpdate {
@@ -158,4 +170,36 @@ export interface ActorUpdate {
   passive_perception?: number; stealth?: number
   equipment_slots?: (string | null)[]; skill_slots?: (string | null)[]
   backpack?: string[]
+  is_shop?: boolean; shop_items?: string[]
+}
+
+// ---- Item Library (道具库) ----
+
+export interface Item {
+  id: string
+  name: string
+  category: 'weapon' | 'armor' | 'consumable' | 'skill' | 'misc'
+  description: string
+  effect_text: string
+  icon_url?: string | null
+  price: number
+  created_at: number; updated_at: number
+}
+
+export interface ItemCreate {
+  name: string
+  category?: Item['category']
+  description?: string
+  effect_text?: string
+  icon_url?: string | null
+  price?: number
+}
+
+export interface ItemUpdate {
+  name?: string
+  category?: Item['category']
+  description?: string
+  effect_text?: string
+  icon_url?: string | null
+  price?: number
 }

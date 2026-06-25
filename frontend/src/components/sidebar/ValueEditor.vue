@@ -1,9 +1,9 @@
 <template>
   <div class="value-editor">
-    <h3>修改数值 <span v-if="token" class="target">→ {{ token.id }}</span></h3>
+    <h3>修改数值 <span v-if="token" class="target">→ {{ displayName(token) }}</span></h3>
     <select v-if="!token && isAdmin" v-model="tokenId">
       <option value="">选择目标...</option>
-      <option v-for="t in tokens" :key="t.id" :value="t.id">{{ t.id }}</option>
+      <option v-for="t in tokens" :key="t.id" :value="t.id">{{ displayName(t) }}</option>
     </select>
     <div class="row">
       <select v-model="field">
@@ -34,6 +34,10 @@ const field = ref('hp')
 const delta = ref(0)
 
 const targetId = computed(() => props.token?.id ?? tokenId.value)
+
+function displayName(t: any): string {
+  return t?.character_name || t?.type || t?.id || '?'
+}
 
 function apply() {
   if (!targetId.value) return

@@ -10,7 +10,7 @@
           <span v-if="!p.is_connected" class="tag off">断线</span>
         </div>
         <div class="row2" v-if="p.token">
-          <span class="char">{{ p.token.character_name || p.token.name || p.token.id }}</span>
+          <span class="char">{{ p.token.character_name || p.token.type }}</span>
           <span class="prof" v-if="p.profession">{{ p.profession }}</span>
         </div>
         <div class="stats" v-if="p.token">

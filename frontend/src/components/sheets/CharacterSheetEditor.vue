@@ -19,6 +19,17 @@
         <!-- 基本信息 -->
         <section class="block">
           <h5>基本信息</h5>
+          <div class="avatar-row">
+            <div class="avatar-preview">
+              <img v-if="editing.avatar_url" :src="editing.avatar_url" alt="" />
+              <span v-else>{{ editing.name[0] || '?' }}</span>
+            </div>
+            <label class="avatar-upload-btn">
+              上传头像（用于地图棋子，方便区分）
+              <input type="file" accept="image/*" hidden @change="onAvatarUpload" />
+            </label>
+            <button v-if="editing.avatar_url" class="avatar-clear" @click="editing.avatar_url = ''">移除</button>
+          </div>
           <input v-model="editing.name" placeholder="角色名称" />
           <div class="grid2">
             <input v-model="editing.nickname" placeholder="玩家昵称" />
@@ -116,6 +127,7 @@ import { equips } from '../../stores/resources'
 interface EditingSheet {
   id?: string
   name: string
+  avatar_url: string
   nickname: string
   gender: string
   profession: string
@@ -149,12 +161,15 @@ const SKILL_SLOTS = [
   { key: 'skill2', label: '技能2', placeholder: '技能名称' },
 ]
 
+const props = defineProps<{ initialSheetId?: string | null }>()
+
 const sheets = ref<CharacterSheet[]>([])
 const editing = ref<EditingSheet | null>(null)
 const loading = ref(true)
 const error = ref('')
 const saved = ref(false)
 const dragSheetId = ref<string | null>(null)
+const uploading = ref(false)
 
 // Simple creation-point estimate (configurable later)
 const usedCP = computed(() => {
@@ -165,12 +180,19 @@ const usedCP = computed(() => {
 
 async function load() {
   loading.value = true
-  try { sheets.value = await listMyCharacters() } finally { loading.value = false }
+  try {
+    sheets.value = await listMyCharacters()
+    // 从外部点击某张卡片打开时，直接进入该卡片的编辑态，而不是空白/列表态
+    if (props.initialSheetId) {
+      const target = sheets.value.find((s) => s.id === props.initialSheetId)
+      if (target) startEdit(target)
+    }
+  } finally { loading.value = false }
 }
 
 function emptySheet(): EditingSheet {
   return {
-    name: '', nickname: '', gender: '', profession: '', talent: '',
+    name: '', avatar_url: '', nickname: '', gender: '', profession: '', talent: '',
     hp_base: 100, armor_base: 5, ap_base: 2, gold: 0,
     equipment_slots: ['', '', '', '', '', ''],
     skill_slots: ['', ''],
@@ -186,6 +208,7 @@ function startEdit(s: CharacterSheet) {
   editing.value = {
     id: s.id,
     name: s.name || '',
+    avatar_url: s.avatar_url || '',
     nickname: '',
     gender: s.gender || '',
     profession: s.profession || '',
@@ -237,6 +260,7 @@ async function onSave() {
 
   const body = {
     name: e.name,
+    avatar_url: e.avatar_url || null,
     gender: e.gender,
     profession: e.profession,
     talent: e.talent,
@@ -281,13 +305,37 @@ async function onDelete(s: CharacterSheet) {
 function onDragStart(e: DragEvent, s: CharacterSheet) {
   dragSheetId.value = s.id
   e.dataTransfer?.setData('application/json', JSON.stringify({
-    kind: 'character_sheet', sheet_id: s.id, name: s.name,
+    kind: 'character_sheet', sheet: s,
   }))
   e.dataTransfer!.effectAllowed = 'copy'
   // 设置拖拽时的视觉反馈图片
   const el = e.target as HTMLElement
   if (el) {
     e.dataTransfer?.setDragImage(el, 10, 10)
+  }
+}
+
+async function onAvatarUpload(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file || !editing.value) return
+  uploading.value = true
+  const form = new FormData()
+  form.append('file', file)
+  try {
+    const r = await fetch(`http://${window.location.hostname}:8000/api/upload/avatar`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
+      body: form,
+    })
+    if (!r.ok) throw new Error('上传失败')
+    const data = await r.json()
+    editing.value.avatar_url = data.url
+  } catch (err) {
+    error.value = '头像上传失败: ' + (err as Error).message
+  } finally {
+    uploading.value = false
+    input.value = ''
   }
 }
 
@@ -313,6 +361,15 @@ onMounted(load)
 .block h5 { margin: 0 0 8px; font-size: 13px; color: #0f3460;
   border-bottom: 1px dashed #ccc; padding-bottom: 4px; }
 .cp-hint { font-size: 11px; color: #888; font-weight: normal; }
+.avatar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.avatar-preview { width: 40px; height: 40px; border-radius: 50%; background: #0f3460;
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 600; flex-shrink: 0; overflow: hidden; }
+.avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
+.avatar-upload-btn { font-size: 11px; color: #0f3460; border: 1px dashed #0f3460;
+  border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+.avatar-upload-btn:hover { background: #eef3fb; }
+.avatar-clear { font-size: 11px; padding: 4px 8px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .grid-nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .grid-nums label { display: flex; flex-direction: column; font-size: 11px; color: #666; }

@@ -7,11 +7,12 @@ class RoomService:
     def __init__(self):
         self.rooms: Dict[str, Room] = {}
 
-    def create_room(self, name: str, host_id: str) -> Room:
+    def create_room(self, name: str, host_id: str, host_nickname: str = "") -> Room:
         room_id = str(uuid.uuid4())[:8]
         room = Room(id=room_id, name=name)
         room.players[host_id] = Player(
-            id=host_id, name=host_id, is_host=True, is_connected=True,
+            id=host_id, name=host_nickname or host_id, nickname=host_nickname,
+            is_host=True, is_connected=True,
         )
         self.rooms[room_id] = room
         return room

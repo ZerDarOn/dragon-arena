@@ -3,7 +3,7 @@ from typing import Dict
 from fastapi import WebSocket, WebSocketDisconnect
 from app.services.room_service import RoomService
 from app.services.chat_service import ChatService
-from app.services.dice_service import roll_dice
+from app.services.dice_service import roll_dice, roll_expression
 from app.services.token_service import TokenService
 from app.services.turn_service import TurnService
 from app.services.vision_service import VisionService
@@ -99,6 +99,10 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
             id=player_id, name=nickname or player_id, nickname=nickname,
             is_host=False, is_connected=True,
         )
+    elif nickname and not room.players[player_id].nickname:
+        # 房主的 Player 记录是在 /rooms 建房时就创建的（早于 WS 连接），
+        # 当时没有 nickname；这里补上，否则房主永远显示成一串 user id。
+        room.players[player_id].nickname = nickname
     room.players[player_id].is_connected = True
 
     gs = get_game_state(room_id, room_service)
@@ -110,401 +114,481 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
     try:
         while True:
             data = await websocket.receive_json()
-            t = data.get("type")
-            p = data.get("payload", {})
-            if t == "chat":
-                msg = gs.chat_svc.send(player_id, p.get("channel", "hall"),
-                                       text=p.get("text", ""),
-                                       target_player=p.get("target_player"))
-                if msg:
-                    _log_event(gs, player_id, "send_message",
-                               params={"channel": msg.channel}, target=p.get("target_player"))
-                    out = {"type": "chat", "payload": msg.model_dump()}
-                    if msg.recipients is None:
-                        await connection_mgr.broadcast(room_id, out)
+            try:
+                t = data.get("type")
+                p = data.get("payload", {})
+                if t == "chat":
+                    msg = gs.chat_svc.send(player_id, p.get("channel", "hall"),
+                                           text=p.get("text", ""),
+                                           target_player=p.get("target_player"),
+                                           is_admin=is_admin)
+                    if msg:
+                        _log_event(gs, player_id, "send_message",
+                                   params={"channel": msg.channel}, target=p.get("target_player"))
+                        out = {"type": "chat", "payload": msg.model_dump()}
+                        if msg.recipients is None:
+                            await connection_mgr.broadcast(room_id, out)
+                        else:
+                            await connection_mgr.send_to_players(room_id, msg.recipients, out)
                     else:
-                        await connection_mgr.send_to_players(room_id, msg.recipients, out)
-            elif t == "dice_roll":
-                r = roll_dice(sides=p.get("sides", 20), modifier=p.get("modifier", 0),
-                              crit_success_threshold=gs.room.config.crit_success,
-                              crit_fail_threshold=gs.room.config.crit_fail)
-                _log_event(gs, player_id, "dice", params=p, result=r.model_dump())
-                await connection_mgr.broadcast(room_id, {
-                    "type": "dice_result", "payload": {"actor": player_id, **r.model_dump()},
-                })
-            elif t == "move":
-                tid_m = p.get("token_id")
-                tok_m = gs.room.tokens.get(tid_m)
-                if tok_m and _can_control(tok_m, user, player_id):
-                    result = gs.token_svc.move_along_path(
-                        tid_m, [tuple(x) for x in p.get("path", [])])
-                    _log_event(gs, player_id, "move", target=tid_m,
-                               params={"path": p.get("path", [])}, result=result.model_dump())
-                await _broadcast_state(gs, room_id)
-            elif t == "modify_value":
-                tid_v = p.get("token_id")
-                tok_v = gs.room.tokens.get(tid_v)
-                # 数值修改：仅管理员或 owner
-                if tok_v and _can_control(tok_v, user, player_id):
-                    gs.token_svc.modify_value(tid_v, p.get("field"), p.get("delta", 0))
-                    _log_event(gs, player_id, "modify_value", target=tid_v, params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "add_state":
-                tid_s = p.get("token_id")
-                tok_s = gs.room.tokens.get(tid_s)
-                if tok_s and _can_control(tok_s, user, player_id):
-                    gs.token_svc.add_state(tid_s,
-                                           state_id=p.get("state_id", f"s{int(time.time()*1000)}"),
-                                           name=p.get("name", ""), description=p.get("description", ""),
-                                           ttl=p.get("ttl", 1), intensity=p.get("intensity"))
-                _log_event(gs, player_id, "add_state", target=p.get("token_id"), params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "place_token":
-                character = p.get("character")
-                gs.token_svc.place_token(
-                    p.get("token_id"), p.get("x"), p.get("y"), character=character,
-                )
-                # Also update Player record if this is the placer's token
-                if user and p.get("token_id"):
-                    pid = user.id
-                    if pid in gs.room.players:
-                        gs.room.players[pid].token_id = p.get("token_id")
-                        if character:
-                            gs.room.players[pid].character_name = character.get("name", "")
-                            gs.room.players[pid].profession = character.get("profession", "")
-                            gs.room.players[pid].gender = character.get("gender", "")
-                            gs.room.players[pid].talent = character.get("talent", "")
-                _log_event(gs, player_id, "place_token", target=p.get("token_id"), params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "place_unit":
-                # DM 放置非玩家单位（怪物/NPC/陷阱/掉落物）
-                if not (user and user.is_admin):
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "admin only"}
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "消息发送失败：频道不可用或没有权限"}
+                        })
+                elif t == "dice_roll":
+                    # 新版传 expression（如 "2d20kh1+5"）；旧版传 sides/modifier，
+                    # 在这里拼成一个等价表达式，统一走一套引擎，不留两份逻辑。
+                    expr = p.get("expression")
+                    if not expr:
+                        sides_legacy = p.get("sides", 20)
+                        mod_legacy = p.get("modifier", 0)
+                        expr = f"1d{sides_legacy}{mod_legacy:+d}" if mod_legacy else f"1d{sides_legacy}"
+                    r = roll_expression(expr,
+                                        crit_success_threshold=gs.room.config.crit_success,
+                                        crit_fail_threshold=gs.room.config.crit_fail,
+                                        forced_values=p.get("rolls"))
+                    _log_event(gs, player_id, "dice", params=p, result=r.model_dump())
+                    await connection_mgr.broadcast(room_id, {
+                        "type": "dice_result", "payload": {"actor": player_id, **r.model_dump()},
                     })
-                    continue
-                unit_type = p.get("unit_type", "monster")
-                name = p.get("name", unit_type)
-                x, y = int(p.get("x", 0)), int(p.get("y", 0))
-                # 生成唯一 id
-                token_id = f"{unit_type}_{int(time.time() * 1000) % 1000000}"
-                # 占位检查
-                occupied = any(
-                    (tok.position == {"x": x, "y": y} and not tok.is_dead)
-                    for tok in gs.room.tokens.values()
-                )
-                if occupied:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "cell occupied"}
+                elif t == "move":
+                    tid_m = p.get("token_id")
+                    tok_m = gs.room.tokens.get(tid_m)
+                    if tok_m and _can_control(tok_m, user, player_id):
+                        result = gs.token_svc.move_along_path(
+                            tid_m, [tuple(x) for x in p.get("path", [])])
+                        _log_event(gs, player_id, "move", target=tid_m,
+                                   params={"path": p.get("path", [])}, result=result.model_dump())
+                    await _broadcast_state(gs, room_id)
+                elif t == "modify_value":
+                    tid_v = p.get("token_id")
+                    tok_v = gs.room.tokens.get(tid_v)
+                    # 数值修改：仅管理员或 owner
+                    if tok_v and _can_control(tok_v, user, player_id):
+                        gs.token_svc.modify_value(tid_v, p.get("field"), p.get("delta", 0))
+                        _log_event(gs, player_id, "modify_value", target=tid_v, params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "add_state":
+                    tid_s = p.get("token_id")
+                    tok_s = gs.room.tokens.get(tid_s)
+                    if tok_s and _can_control(tok_s, user, player_id):
+                        gs.token_svc.add_state(tid_s,
+                                               state_id=p.get("state_id", f"s{int(time.time()*1000)}"),
+                                               name=p.get("name", ""), description=p.get("description", ""),
+                                               ttl=p.get("ttl", 1), intensity=p.get("intensity"))
+                    _log_event(gs, player_id, "add_state", target=p.get("token_id"), params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "place_token":
+                    token_id_pt = p.get("token_id")
+                    existing = gs.room.tokens.get(token_id_pt) if token_id_pt else None
+                    # 已存在的 token：只有 owner 本人或管理员能再次落子/挪动它
+                    # （不存在则视为玩家在认领一个新 token_id，允许）
+                    if existing and not _can_control(existing, user, player_id):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "该角色已被其他玩家占用"}
+                        })
+                        continue
+                    character = p.get("character")
+                    is_new_claim = existing is None
+                    gs.token_svc.place_token(token_id_pt, p.get("x"), p.get("y"), character=character)
+                    # 这个 token 真正归属谁：管理员可以代别人摆放（从角色卡列表拖某个
+                    # 玩家的卡到地图），此时信任 character.owner_id；非管理员只能摆自己
+                    # 的（角色卡列表本来就只会显示自己的卡，但这里仍强制覆盖，防止
+                    # 客户端被改过后伪造 owner_id 顶替别人）。
+                    claimed_owner = character.get("owner_id") if character else None
+                    owner_pid = claimed_owner if (is_admin and claimed_owner) else player_id
+                    if token_id_pt:
+                        if is_new_claim:
+                            gs.room.tokens[token_id_pt].owner_id = owner_pid
+                        if owner_pid in gs.room.players:
+                            gs.room.players[owner_pid].token_id = token_id_pt
+                            if character:
+                                gs.room.players[owner_pid].character_name = character.get("name", "")
+                                gs.room.players[owner_pid].profession = character.get("profession", "")
+                                gs.room.players[owner_pid].gender = character.get("gender", "")
+                                gs.room.players[owner_pid].talent = character.get("talent", "")
+                    _log_event(gs, player_id, "place_token", target=token_id_pt, params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "place_unit":
+                    # DM 放置非玩家单位（怪物/NPC/陷阱/掉落物）
+                    if not (user and user.is_admin):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "admin only"}
+                        })
+                        continue
+                    unit_type = p.get("unit_type", "monster")
+                    name = p.get("name", unit_type)
+                    x, y = int(p.get("x", 0)), int(p.get("y", 0))
+                    # 生成唯一 id
+                    token_id = f"{unit_type}_{int(time.time() * 1000) % 1000000}"
+                    # 占位检查
+                    occupied = any(
+                        (tok.position == {"x": x, "y": y} and not tok.is_dead)
+                        for tok in gs.room.tokens.values()
+                    )
+                    if occupied:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "cell occupied"}
+                        })
+                        continue
+                    hp = int(p.get("hp", 50))
+                    gs.room.tokens[token_id] = Token(
+                        id=token_id, type=unit_type, position={"x": x, "y": y},
+                        character_name=name if unit_type in ("monster", "npc") else "",
+                        hp=hp, max_hp=hp, armor=int(p.get("armor", 5)),
+                        ap=0, max_ap=0, gold=0,
+                        vision_range=p.get("vision_range") or gs.room.config.vision_range,
+                        listen_radius=p.get("listen_radius", 6),
+                        passive_perception=p.get("passive_perception", 10),
+                        darkvision=bool(p.get("darkvision", False)),
+                        stealth=int(p.get("stealth", 0)),
+                        is_shop=bool(p.get("is_shop", False)),
+                        shop_items=list(p.get("shop_items") or []),
+                    )
+                    _log_event(gs, player_id, "place_unit", target=token_id, params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "spawn_token":
+                    # DM 从 Actor 库拖拽生成 Token
+                    if not (user and user.is_admin):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "admin only"}
+                        })
+                        continue
+                    actor_id = p.get("actor_id")
+                    actor = user_storage.get_actor(actor_id)
+                    if not actor:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "actor not found"}
+                        })
+                        continue
+                    x, y = int(p.get("x", 0)), int(p.get("y", 0))
+                    token_id = f"{actor['type']}_{int(time.time() * 1000) % 1000000}"
+                    gs.room.tokens[token_id] = Token(
+                        id=token_id, type=actor["type"], actor_id=actor_id,
+                        character_name=actor.get("name", ""),
+                        position={"x": x, "y": y},
+                        hp=actor["hp"], max_hp=actor["max_hp"],
+                        armor=actor["armor"], ap=actor["ap"], max_ap=actor["max_ap"],
+                        vision_range=actor["vision_range"],
+                        darkvision=bool(actor["darkvision"]),
+                        listen_radius=actor["listen_radius"],
+                        passive_perception=actor["passive_perception"],
+                        stealth=actor["stealth"],
+                        equipment_slots=actor.get("equipment_slots") or [None]*6,
+                        skill_slots=actor.get("skill_slots") or [None, None],
+                        backpack=actor.get("backpack") or [],
+                        avatar_url=actor.get("avatar_url"),
+                        is_shop=bool(actor.get("is_shop", False)),
+                        shop_items=actor.get("shop_items") or [],
+                    )
+                    gs.room.turn_order.append(token_id)
+                    _log_event(gs, player_id, "spawn_token", target=token_id,
+                               params={"actor_id": actor_id, "x": x, "y": y})
+                    await _broadcast_state(gs, room_id)
+                elif t == "rotate_token":
+                    token = gs.room.tokens.get(p.get("token_id"))
+                    if token and _can_control(token, user, player_id):
+                        token.facing = int(p.get("facing", 0)) % 8
+                        _log_event(gs, player_id, "rotate_token",
+                                   target=p.get("token_id"), params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "size_token":
+                    token = gs.room.tokens.get(p.get("token_id"))
+                    if token and _can_control(token, user, player_id):
+                        token.size = max(1, min(4, int(p.get("size", 1))))
+                        _log_event(gs, player_id, "size_token",
+                                   target=p.get("token_id"), params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "set_terrain":
+                    gs.map_svc.set_terrain(p.get("x"), p.get("y"), p.get("type", "flat"))
+                    _log_event(gs, player_id, "set_terrain", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "set_cell_meta":
+                    # 设置黑暗/光照等元数据（DM 笔刷）
+                    x, y = int(p.get("x", 0)), int(p.get("y", 0))
+                    if "is_dark" in p:
+                        gs.map_svc.set_dark(x, y, bool(p["is_dark"]))
+                    if "light_radius" in p:
+                        gs.map_svc.set_light(x, y, int(p["light_radius"]))
+                    _log_event(gs, player_id, "set_cell_meta", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "fill_terrain":
+                    gs.map_svc.fill_area(
+                        p.get("x1"), p.get("y1"), p.get("x2"), p.get("y2"),
+                        p.get("type", "flat"),
+                    )
+                    _log_event(gs, player_id, "fill_terrain", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "resize_map":
+                    w, h = p.get("width", 30), p.get("height", 30)
+                    gs.room.config = gs.room.config.model_copy(
+                        update={"map_width": w, "map_height": h}
+                    )
+                    # Rebuild map (clears existing terrains — acceptable for MVP)
+                    gs.game_map = GameMap(width=w, height=h)
+                    gs.room.game_map = gs.game_map
+                    gs.map_svc = MapService(gs.game_map)
+                    gs.vision_svc = VisionService(gs.room, gs.game_map)
+                    gs.token_svc = TokenService(gs.room, gs.game_map)
+                    _log_event(gs, player_id, "resize_map", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "set_turn_order":
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can set turn order"}
+                        })
+                        continue
+                    order = p.get("order", [])
+                    gs.turn_svc.set_order(order)
+                    _log_event(gs, player_id, "set_turn_order", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "shuffle_turn_order":
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can shuffle turn order"}
+                        })
+                        continue
+                    gs.turn_svc.shuffle_order()
+                    _log_event(gs, player_id, "shuffle_turn_order", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "force_set_actor":
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can force set actor"}
+                        })
+                        continue
+                    gs.turn_svc.force_set_actor(p.get("token_id", ""))
+                    _log_event(gs, player_id, "force_set_actor", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "clear_combat_log":
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can clear combat log"}
+                        })
+                        continue
+                    gs.event_log.clear()
+                    await connection_mgr.broadcast(room_id, {
+                        "type": "combat_log_cleared", "payload": {}
                     })
-                    continue
-                hp = int(p.get("hp", 50))
-                gs.room.tokens[token_id] = Token(
-                    id=token_id, type=unit_type, position={"x": x, "y": y},
-                    character_name=name if unit_type in ("monster", "npc") else "",
-                    hp=hp, max_hp=hp, armor=int(p.get("armor", 5)),
-                    ap=0, max_ap=0, gold=0,
-                    vision_range=p.get("vision_range") or gs.room.config.vision_range,
-                    listen_radius=p.get("listen_radius", 6),
-                    passive_perception=p.get("passive_perception", 10),
-                    darkvision=bool(p.get("darkvision", False)),
-                    stealth=int(p.get("stealth", 0)),
-                )
-                _log_event(gs, player_id, "place_unit", target=token_id, params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "spawn_token":
-                # DM 从 Actor 库拖拽生成 Token
-                if not (user and user.is_admin):
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "admin only"}
+                elif t == "set_fog_of_war":
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can toggle fog of war"}
+                        })
+                        continue
+                    enabled = p.get("enabled", True)
+                    gs.room.config = gs.room.config.model_copy(
+                        update={"fog_of_war_enabled": enabled}
+                    )
+                    _log_event(gs, player_id, "set_fog_of_war", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "set_poison_circle":
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can control poison circle"}
+                        })
+                        continue
+                    gs.turn_svc.set_poison_circle(
+                        center_x=p.get("center_x"),
+                        center_y=p.get("center_y"),
+                        radius=p.get("radius"),
+                        enabled=p.get("enabled"),
+                    )
+                    _log_event(gs, player_id, "set_poison_circle", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "attack":
+                    # 攻击交互：目标选择 → 掷骰 → 命中判定 → 伤害计算 → 应用
+                    attacker_id = p.get("attacker_id")
+                    defender_id = p.get("defender_id")
+                    attacker = gs.room.tokens.get(attacker_id)
+                    defender = gs.room.tokens.get(defender_id)
+                    if not attacker or not defender:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "attacker or defender not found"}
+                        })
+                        continue
+                    if not _can_control(attacker, user, player_id):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "cannot control attacker"}
+                        })
+                        continue
+                    # 注册默认攻击规则（如果还没有）
+                    if attacker_id not in gs.combat_engine.rules:
+                        gs._register_default_attack_rules(attacker)
+                    # 执行攻击
+                    context = CombatContext(
+                        action="attack",
+                        actor=attacker,
+                        target=defender,
+                        room_config=gs.room.config,
+                    )
+                    combat_log = gs.combat_engine.execute_action(context)
+                    # 广播战斗结果
+                    await connection_mgr.broadcast(room_id, {
+                        "type": "combat_log",
+                        "payload": combat_log,
                     })
-                    continue
-                actor_id = p.get("actor_id")
-                actor = user_storage.get_actor(actor_id)
-                if not actor:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "actor not found"}
+                    # 检查击杀
+                    if defender.is_dead:
+                        # 击杀积分
+                        attacker.score += gs.room.config.score_kill
+                        attacker.gold += gs.room.config.kill_drop_gold
+                        _log_event(gs, player_id, "kill", target=defender_id, params={"score": attacker.score})
+                    _log_event(gs, player_id, "attack", target=defender_id, params=combat_log)
+                    await _broadcast_state(gs, room_id)
+                elif t == "defend":
+                    # 防御：消耗1AP，进行察觉检定
+                    token_id = p.get("token_id")
+                    token = gs.room.tokens.get(token_id)
+                    if not token or not _can_control(token, user, player_id):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "cannot control token"}
+                        })
+                        continue
+                    if token.ap < gs.room.config.defend_ap_cost:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "AP不足"}
+                        })
+                        continue
+                    token.ap -= gs.room.config.defend_ap_cost
+                    # 察觉检定：D20 + 被动觉察
+                    r = roll_dice(sides=20, modifier=token.passive_perception - 10)
+                    _log_event(gs, player_id, "defend", target=token_id, params={"roll": r.model_dump(), "ap_after": token.ap})
+                    await connection_mgr.broadcast(room_id, {
+                        "type": "defend_result",
+                        "payload": {"token_id": token_id, "roll": r.model_dump(), "ap_after": token.ap},
                     })
-                    continue
-                x, y = int(p.get("x", 0)), int(p.get("y", 0))
-                token_id = f"{actor['type']}_{int(time.time() * 1000) % 1000000}"
-                gs.room.tokens[token_id] = Token(
-                    id=token_id, type=actor["type"], actor_id=actor_id,
-                    character_name=actor.get("name", ""),
-                    position={"x": x, "y": y},
-                    hp=actor["hp"], max_hp=actor["max_hp"],
-                    armor=actor["armor"], ap=actor["ap"], max_ap=actor["max_ap"],
-                    vision_range=actor["vision_range"],
-                    darkvision=bool(actor["darkvision"]),
-                    listen_radius=actor["listen_radius"],
-                    passive_perception=actor["passive_perception"],
-                    stealth=actor["stealth"],
-                    equipment_slots=actor.get("equipment_slots") or [None]*6,
-                    skill_slots=actor.get("skill_slots") or [None, None],
-                    backpack=actor.get("backpack") or [],
-                    avatar_url=actor.get("avatar_url"),
-                )
-                gs.room.turn_order.append(token_id)
-                _log_event(gs, player_id, "spawn_token", target=token_id,
-                           params={"actor_id": actor_id, "x": x, "y": y})
-                await _broadcast_state(gs, room_id)
-            elif t == "rotate_token":
-                token = gs.room.tokens.get(p.get("token_id"))
-                if token and _can_control(token, user, player_id):
-                    token.facing = int(p.get("facing", 0)) % 8
-                    _log_event(gs, player_id, "rotate_token",
-                               target=p.get("token_id"), params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "size_token":
-                token = gs.room.tokens.get(p.get("token_id"))
-                if token and _can_control(token, user, player_id):
-                    token.size = max(1, min(4, int(p.get("size", 1))))
-                    _log_event(gs, player_id, "size_token",
-                               target=p.get("token_id"), params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "set_terrain":
-                gs.map_svc.set_terrain(p.get("x"), p.get("y"), p.get("type", "flat"))
-                _log_event(gs, player_id, "set_terrain", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "set_cell_meta":
-                # 设置黑暗/光照等元数据（DM 笔刷）
-                x, y = int(p.get("x", 0)), int(p.get("y", 0))
-                if "is_dark" in p:
-                    gs.map_svc.set_dark(x, y, bool(p["is_dark"]))
-                if "light_radius" in p:
-                    gs.map_svc.set_light(x, y, int(p["light_radius"]))
-                _log_event(gs, player_id, "set_cell_meta", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "fill_terrain":
-                gs.map_svc.fill_area(
-                    p.get("x1"), p.get("y1"), p.get("x2"), p.get("y2"),
-                    p.get("type", "flat"),
-                )
-                _log_event(gs, player_id, "fill_terrain", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "resize_map":
-                w, h = p.get("width", 30), p.get("height", 30)
-                gs.room.config = gs.room.config.model_copy(
-                    update={"map_width": w, "map_height": h}
-                )
-                # Rebuild map (clears existing terrains — acceptable for MVP)
-                gs.game_map = GameMap(width=w, height=h)
-                gs.room.game_map = gs.game_map
-                gs.map_svc = MapService(gs.game_map)
-                gs.vision_svc = VisionService(gs.room, gs.game_map)
-                gs.token_svc = TokenService(gs.room, gs.game_map)
-                _log_event(gs, player_id, "resize_map", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "set_turn_order":
-                if not is_admin:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "only admin can set turn order"}
-                    })
-                    continue
-                order = p.get("order", [])
-                gs.turn_svc.set_order(order)
-                _log_event(gs, player_id, "set_turn_order", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "shuffle_turn_order":
-                if not is_admin:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "only admin can shuffle turn order"}
-                    })
-                    continue
-                gs.turn_svc.shuffle_order()
-                _log_event(gs, player_id, "shuffle_turn_order", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "force_set_actor":
-                if not is_admin:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "only admin can force set actor"}
-                    })
-                    continue
-                gs.turn_svc.force_set_actor(p.get("token_id", ""))
-                _log_event(gs, player_id, "force_set_actor", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "clear_combat_log":
-                if not is_admin:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "only admin can clear combat log"}
-                    })
-                    continue
-                gs.event_log.clear()
-                await connection_mgr.broadcast(room_id, {
-                    "type": "combat_log_cleared", "payload": {}
-                })
-            elif t == "set_fog_of_war":
-                if not is_admin:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "only admin can toggle fog of war"}
-                    })
-                    continue
-                enabled = p.get("enabled", True)
-                gs.room.config = gs.room.config.model_copy(
-                    update={"fog_of_war_enabled": enabled}
-                )
-                _log_event(gs, player_id, "set_fog_of_war", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "set_poison_circle":
-                if not is_admin:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "only admin can control poison circle"}
-                    })
-                    continue
-                gs.turn_svc.set_poison_circle(
-                    center_x=p.get("center_x"),
-                    center_y=p.get("center_y"),
-                    radius=p.get("radius"),
-                    enabled=p.get("enabled"),
-                )
-                _log_event(gs, player_id, "set_poison_circle", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "attack":
-                # 攻击交互：目标选择 → 掷骰 → 命中判定 → 伤害计算 → 应用
-                attacker_id = p.get("attacker_id")
-                defender_id = p.get("defender_id")
-                attacker = gs.room.tokens.get(attacker_id)
-                defender = gs.room.tokens.get(defender_id)
-                if not attacker or not defender:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "attacker or defender not found"}
-                    })
-                    continue
-                if not _can_control(attacker, user, player_id):
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "cannot control attacker"}
-                    })
-                    continue
-                # 注册默认攻击规则（如果还没有）
-                if attacker_id not in gs.combat_engine.rules:
-                    gs._register_default_attack_rules(attacker)
-                # 执行攻击
-                context = CombatContext(
-                    action="attack",
-                    actor=attacker,
-                    target=defender,
-                    room_config=gs.room.config,
-                )
-                combat_log = gs.combat_engine.execute_action(context)
-                # 广播战斗结果
-                await connection_mgr.broadcast(room_id, {
-                    "type": "combat_log",
-                    "payload": combat_log,
-                })
-                # 检查击杀
-                if defender.is_dead:
-                    # 击杀积分
-                    attacker.score += gs.room.config.score_kill
-                    attacker.gold += gs.room.config.kill_drop_gold
-                    _log_event(gs, player_id, "kill", target=defender_id, params={"score": attacker.score})
-                _log_event(gs, player_id, "attack", target=defender_id, params=combat_log)
-                await _broadcast_state(gs, room_id)
-            elif t == "defend":
-                # 防御：消耗1AP，进行察觉检定
-                token_id = p.get("token_id")
-                token = gs.room.tokens.get(token_id)
-                if not token or not _can_control(token, user, player_id):
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "cannot control token"}
-                    })
-                    continue
-                if token.ap < gs.room.config.defend_ap_cost:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "AP不足"}
-                    })
-                    continue
-                token.ap -= gs.room.config.defend_ap_cost
-                # 察觉检定：D20 + 被动觉察
-                r = roll_dice(sides=20, modifier=token.passive_perception - 10)
-                _log_event(gs, player_id, "defend", target=token_id, params={"roll": r.model_dump(), "ap_after": token.ap})
-                await connection_mgr.broadcast(room_id, {
-                    "type": "defend_result",
-                    "payload": {"token_id": token_id, "roll": r.model_dump(), "ap_after": token.ap},
-                })
-                await _broadcast_state(gs, room_id)
-            elif t == "sprint":
-                # 疾跑：消耗2AP，移动4格
-                token_id = p.get("token_id")
-                path = p.get("path", [])
-                token = gs.room.tokens.get(token_id)
-                if not token or not _can_control(token, user, player_id):
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "cannot control token"}
-                    })
-                    continue
-                if token.ap < gs.room.config.sprint_ap_cost:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "AP不足（疾跑需2AP）"}
-                    })
-                    continue
-                if len(path) > gs.room.config.sprint_distance:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": f"疾跑最多{gs.room.config.sprint_distance}格"}
-                    })
-                    continue
-                token.ap -= gs.room.config.sprint_ap_cost
-                result = gs.token_svc.move_along_path(token_id, [tuple(x) for x in path])
-                _log_event(gs, player_id, "sprint", target=token_id, params={"path": path, "ap_after": token.ap})
-                await _broadcast_state(gs, room_id)
-            elif t == "use_item":
-                # 使用道具/技能
-                token_id = p.get("token_id")
-                item_name = p.get("item_name", "")
-                token = gs.room.tokens.get(token_id)
-                if not token or not _can_control(token, user, player_id):
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "cannot control token"}
-                    })
-                    continue
-                # 检查道具是否在装备槽或背包中
-                in_slot = item_name in (token.equipment_slots or [])
-                in_backpack = item_name in (token.backpack or [])
-                if not in_slot and not in_backpack:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "道具不在装备栏或背包中"}
-                    })
-                    continue
-                # 检查次数
-                charges = token.item_charges.get(item_name)
-                if charges is not None and charges <= 0:
-                    await connection_mgr.send_to_player(room_id, player_id, {
-                        "type": "error", "payload": {"message": "道具次数已耗尽"}
-                    })
-                    continue
-                # 扣除次数或从背包移除
-                if in_backpack and item_name in token.backpack:
-                    if charges is not None:
+                    await _broadcast_state(gs, room_id)
+                elif t == "sprint":
+                    # 疾跑：消耗2AP，移动4格
+                    token_id = p.get("token_id")
+                    path = p.get("path", [])
+                    token = gs.room.tokens.get(token_id)
+                    if not token or not _can_control(token, user, player_id):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "cannot control token"}
+                        })
+                        continue
+                    if token.ap < gs.room.config.sprint_ap_cost:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "AP不足（疾跑需2AP）"}
+                        })
+                        continue
+                    if len(path) > gs.room.config.sprint_distance:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": f"疾跑最多{gs.room.config.sprint_distance}格"}
+                        })
+                        continue
+                    token.ap -= gs.room.config.sprint_ap_cost
+                    result = gs.token_svc.move_along_path(token_id, [tuple(x) for x in path])
+                    _log_event(gs, player_id, "sprint", target=token_id, params={"path": path, "ap_after": token.ap})
+                    await _broadcast_state(gs, room_id)
+                elif t == "use_item":
+                    # 使用道具/技能
+                    token_id = p.get("token_id")
+                    item_name = p.get("item_name", "")
+                    token = gs.room.tokens.get(token_id)
+                    if not token or not _can_control(token, user, player_id):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "cannot control token"}
+                        })
+                        continue
+                    # 检查道具是否在装备槽或背包中
+                    in_slot = item_name in (token.equipment_slots or [])
+                    in_backpack = item_name in (token.backpack or [])
+                    if not in_slot and not in_backpack:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "道具不在装备栏或背包中"}
+                        })
+                        continue
+                    # 检查次数
+                    charges = token.item_charges.get(item_name)
+                    if charges is not None and charges <= 0:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "道具次数已耗尽"}
+                        })
+                        continue
+                    # 扣除次数或从背包移除
+                    if in_backpack and item_name in token.backpack:
+                        if charges is not None:
+                            token.item_charges[item_name] -= 1
+                        else:
+                            token.backpack.remove(item_name)
+                    elif in_slot and charges is not None:
                         token.item_charges[item_name] -= 1
-                    else:
-                        token.backpack.remove(item_name)
-                elif in_slot and charges is not None:
-                    token.item_charges[item_name] -= 1
-                # 广播事件让团主知道谁用了什么，效果由团主口胡（ADR-5）
-                _log_event(gs, player_id, "use_item", target=token_id, params={"item": item_name})
-                await connection_mgr.broadcast(room_id, {
-                    "type": "item_used",
-                    "payload": {"token_id": token_id, "item": item_name},
-                })
-                await _broadcast_state(gs, room_id)
-            elif t == "end_turn":
-                gs.turn_svc.end_turn()
-                _log_event(gs, player_id, "end_turn")
-                await _broadcast_state(gs, room_id)
-            elif t == "set_turn_order":
-                gs.turn_svc.set_order(p.get("order", []))
-                _log_event(gs, player_id, "set_turn_order", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "shuffle_turn_order":
-                gs.turn_svc.shuffle_order(p.get("order"))
-                _log_event(gs, player_id, "shuffle_turn_order", params=p)
-                await _broadcast_state(gs, room_id)
-            elif t == "start_game":
-                gs.turn_svc.start()
-                _log_event(gs, player_id, "start_game")
-                await _broadcast_state(gs, room_id)
-            else:
+                    # 广播事件让团主知道谁用了什么，效果由团主口胡（ADR-5）
+                    _log_event(gs, player_id, "use_item", target=token_id, params={"item": item_name})
+                    await connection_mgr.broadcast(room_id, {
+                        "type": "item_used",
+                        "payload": {"token_id": token_id, "item": item_name},
+                    })
+                    await _broadcast_state(gs, room_id)
+                elif t == "buy_item":
+                    # 跟商店型 NPC 买道具：扣买家金币，把道具加进背包。
+                    buyer_id = p.get("buyer_token_id")
+                    shop_id = p.get("shop_token_id")
+                    item_name = p.get("item_name", "")
+                    buyer = gs.room.tokens.get(buyer_id)
+                    shop = gs.room.tokens.get(shop_id)
+                    if not buyer or not _can_control(buyer, user, player_id):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "无法操作这个角色"}
+                        })
+                        continue
+                    if not shop or not shop.is_shop:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "这不是一个商店"}
+                        })
+                        continue
+                    if item_name not in (shop.shop_items or []):
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "这家店没有这个道具"}
+                        })
+                        continue
+                    item = user_storage.get_item_by_name(item_name)
+                    if not item or item["price"] <= 0:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "该道具未设置价格，不能购买"}
+                        })
+                        continue
+                    if buyer.gold < item["price"]:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": f"金币不足（需要{item['price']}，你有{buyer.gold}）"}
+                        })
+                        continue
+                    buyer.gold -= item["price"]
+                    buyer.backpack.append(item_name)
+                    _log_event(gs, player_id, "buy_item", target=buyer_id,
+                               params={"shop": shop_id, "item": item_name, "price": item["price"]})
+                    await connection_mgr.broadcast(room_id, {
+                        "type": "item_bought",
+                        "payload": {"token_id": buyer_id, "item": item_name, "price": item["price"]},
+                    })
+                    await _broadcast_state(gs, room_id)
+                elif t == "end_turn":
+                    gs.turn_svc.end_turn()
+                    _log_event(gs, player_id, "end_turn")
+                    await _broadcast_state(gs, room_id)
+                elif t == "set_turn_order":
+                    gs.turn_svc.set_order(p.get("order", []))
+                    _log_event(gs, player_id, "set_turn_order", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "shuffle_turn_order":
+                    gs.turn_svc.shuffle_order(p.get("order"))
+                    _log_event(gs, player_id, "shuffle_turn_order", params=p)
+                    await _broadcast_state(gs, room_id)
+                elif t == "start_game":
+                    gs.turn_svc.start()
+                    _log_event(gs, player_id, "start_game")
+                    await _broadcast_state(gs, room_id)
+                else:
+                    await connection_mgr.send_to_player(room_id, player_id, {
+                        "type": "error", "payload": {"message": f"unknown type: {t}"}
+                    })
+            except WebSocketDisconnect:
+                raise
+            except Exception as e:
                 await connection_mgr.send_to_player(room_id, player_id, {
-                    "type": "error", "payload": {"message": f"unknown type: {t}"}
+                    "type": "error", "payload": {"message": f"操作处理失败: {e}"}
                 })
     except WebSocketDisconnect:
         connection_mgr.disconnect(room_id, player_id)

@@ -34,6 +34,10 @@ class TokenService:
         tok.position = {"x": x, "y": y}
         # Apply character sheet snapshot if provided
         if character:
+            if character.get("name"):
+                tok.character_name = character["name"]
+            if character.get("avatar_url"):
+                tok.avatar_url = character["avatar_url"]
             tok.hp = character.get("hp_base", self.cfg.start_hp)
             tok.max_hp = tok.hp
             tok.armor = character.get("armor_base", self.cfg.start_armor)

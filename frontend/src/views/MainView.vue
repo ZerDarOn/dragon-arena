@@ -19,6 +19,10 @@
       </div>
     </header>
 
+    <div v-if="inBattle && wsStatus !== 'open'" class="conn-banner">
+      {{ wsStatus === 'reconnecting' ? '⚠ 与服务器断开，正在重连…' : '⚠ 正在连接服务器…' }}
+    </div>
+
     <!-- 资源管理侧边栏（战役态，管理员，左侧） -->
     <aside v-if="inBattle && auth.isAdmin && showResPanel" class="res-panel">
       <MiniResPanel @close="showResPanel = false" />
@@ -115,7 +119,7 @@
                         @cell-click="onCellClick"
                         @token-selected="onTokenSelected"
                         @token-rotate="onTokenRotate"
-                        @token-scale="onTokenSize"
+                        @token-size="onTokenSize"
                         :combat-mode="combatMode"
                         @token-dblclick="onTokenDblClick"
                         @spawn-actor="onSpawnActor"
@@ -160,8 +164,8 @@
       </details>
     </Modal>
 
-    <Modal v-if="showSheet" title="我的角色卡" @close="showSheet = false">
-      <CharacterSheetEditor />
+    <Modal v-if="showSheet" title="我的角色卡" @close="showSheet = false; editingSheetId = null">
+      <CharacterSheetEditor :initial-sheet-id="editingSheetId" />
     </Modal>
 
     <Modal v-if="showUsers && auth.isAdmin" title="用户管理（管理员）" @close="showUsers = false">
@@ -219,9 +223,10 @@
         <div v-if="viewingToken.backpack?.length" class="section">
           <h4>背包</h4>
           <ul class="slots">
-            <li v-for="(s, i) in viewingToken.backpack" :key="i">
-              <span class="slot-name">槽{{ Number(i)+1 }}</span>
-              <span class="slot-val">{{ s || '—' }}</span>
+            <li v-for="(s, i) in viewingToken.backpack" :key="i" class="backpack-item">
+              <span class="slot-name">{{ s || '—' }}</span>
+              <span class="slot-val item-desc" v-if="itemInfo(s)">{{ itemInfo(s)?.description }}</span>
+              <button v-if="isOwnToken(viewingToken) && s" class="use-btn" @click="useViewedItem(s)">使用</button>
             </li>
           </ul>
         </div>
@@ -234,7 +239,20 @@
             </li>
           </ul>
         </div>
-        <p class="readonly-hint">只读视图</p>
+        <!-- 商店货架：只有标记为商店的 NPC 才有 -->
+        <div v-if="viewingToken.is_shop" class="section shop">
+          <h4>货架 <span class="cp-hint" v-if="selfTokenId">我的金币：{{ room.room?.tokens?.[selfTokenId]?.gold ?? 0 }}</span></h4>
+          <ul class="slots" v-if="viewingToken.shop_items?.length">
+            <li v-for="name in viewingToken.shop_items" :key="name" class="shop-item">
+              <span class="slot-name">{{ name }}</span>
+              <span class="slot-val item-desc" v-if="itemInfo(name)">{{ itemInfo(name)?.description }}</span>
+              <span class="price">{{ itemInfo(name) ? itemInfo(name)!.price + ' 金币' : '未标价，不可购买' }}</span>
+              <button v-if="selfTokenId" class="buy-btn" :disabled="!canBuy(name)" @click="buyFromShop(viewingToken.id, name)">购买</button>
+            </li>
+          </ul>
+          <p v-else class="empty-hint">货架空空如也</p>
+        </div>
+        <p class="readonly-hint" v-if="!isOwnToken(viewingToken) && !viewingToken.is_shop">只读视图</p>
       </div>
     </Modal>
   </div>
@@ -247,11 +265,13 @@ import { useAuthStore } from '../stores/auth'
 import { useRoomStore } from '../stores/room'
 import { useSelfStore } from '../stores/self'
 import { useChatStore } from '../stores/chat'
-import { WSClient, type ServerMessage } from '../api/ws'
+import { useItemStore } from '../stores/items'
+import { WSClient, type ServerMessage, type ConnectionStatus } from '../api/ws'
 import {
   createRoom, listRooms, fetchMe, updateRoomConfig,
   listMyCharacters,
 } from '../api/rest'
+import { pushToast } from '../composables/useToast'
 import type { Room, CharacterSheet } from '../api/types'
 import ChatPanel from '../components/chat/ChatPanel.vue'
 import DMConsole from '../components/layout/DMConsole.vue'
@@ -274,6 +294,7 @@ const auth = useAuthStore()
 const room = useRoomStore()
 const self = useSelfStore()
 const chat = useChatStore()
+const itemStore = useItemStore()
 const dmRef = ref<InstanceType<typeof DMConsole> | null>(null)
 const combatRef = ref<InstanceType<typeof CombatPanel> | null>(null)
 const canvasRef = ref<InstanceType<typeof GameCanvas> | null>(null)
@@ -294,13 +315,27 @@ function onSpawnActor(payload: { actor_id: string; x: number; y: number }) {
   })
 }
 
-function onSpawnSheet(payload: { sheet_id: string; x: number; y: number }) {
+function onSpawnSheet(payload: { sheet: CharacterSheet; x: number; y: number }) {
+  const c = payload.sheet
+  // 用 owner_id（角色卡真正的归属玩家）拼 token_id，跟玩家自己点格子落子时
+  // 用的方案一致（tok_<ownerId>），否则同一个人会因为落子路径不同而冒出两个 token。
   ws?.send({
     type: 'place_token',
     payload: {
-      token_id: `tok_${payload.sheet_id}`,
+      token_id: `tok_${c.owner_id}`,
       x: payload.x, y: payload.y,
-      character: { sheet_id: payload.sheet_id },
+      character: {
+        name: c.name, avatar_url: c.avatar_url, gender: c.gender,
+        profession: c.profession, talent: c.talent,
+        hp_base: c.hp_base, armor_base: c.armor_base, ap_base: c.ap_base, gold: c.gold,
+        backpack: c.backpack, equipment_slots: c.equipment_slots, skill_slots: c.skill_slots,
+        darkvision: c.darkvision, vision_range: c.vision_range,
+        listen_radius: c.listen_radius, passive_perception: c.passive_perception,
+        stealth: c.stealth,
+        // 管理员代别人摆放时，归属者是角色卡的主人，不是拖拽操作的管理员本人；
+        // 后端只在操作者是管理员时才采信这个字段，非管理员发什么都不算。
+        owner_id: c.owner_id,
+      },
     },
   })
 }
@@ -316,10 +351,11 @@ function onAttackTarget(targetId: string) {
 }
 
 function onSheetEdit(sheet: any) {
+  editingSheetId.value = sheet.id
   showSheet.value = true
-  // TODO: 传递 sheet 给编辑器
 }
 function onSheetCreate() {
+  editingSheetId.value = null
   showSheet.value = true
 }
 
@@ -327,7 +363,7 @@ function onSheetCreate() {
 const inBattle = computed(() => !!room.room)
 const chatChannels = computed(() =>
   inBattle.value
-    ? ['hall', 'private', 'campaign_hall', 'spatial', 'war_hall']
+    ? ['hall', 'private', 'battle', 'spatial', 'war_hall']
     : ['hall', 'private']
 )
 
@@ -337,6 +373,7 @@ const showSheetPanel = ref(false)
 // --- 弹窗 ---
 const showCreate = ref(false); const showJoin = ref(false)
 const showSheet = ref(false); const showUsers = ref(false)
+const editingSheetId = ref<string | null>(null)
 const showRes = ref(false); const showSheetPicker = ref(false)
 const newRoomName = ref(''); const newMapW = ref(30); const newMapH = ref(30)
 const createError = ref(''); const joinError = ref('')
@@ -372,7 +409,8 @@ const visibleCells = computed<Set<string> | undefined>(() => {
 
 // --- 操作 ---
 async function refreshRooms() {
-  try { rooms.value = await listRooms() } catch {}
+  try { rooms.value = await listRooms() }
+  catch (e: any) { pushToast(`获取房间列表失败：${e.message || e}`) }
 }
 
 async function doCreateRoom() {
@@ -383,7 +421,7 @@ async function doCreateRoom() {
     // 更新地图尺寸
     if (newMapW.value !== 30 || newMapH.value !== 30) {
       try { await updateRoomConfig(r.id, { map_width: newMapW.value, map_height: newMapH.value }) }
-      catch {}
+      catch (e: any) { pushToast(`战役已创建，但地图尺寸设置失败：${e.message || e}`, 'warn') }
     }
     showCreate.value = false
     await connectBattle(r.id)
@@ -396,6 +434,8 @@ async function doJoin() {
   showJoin.value = false
   await connectBattle(joinRoomId.value)
 }
+
+const wsStatus = ref<ConnectionStatus>('closed')
 
 async function connectBattle(roomId: string) {
   // 先验证 token
@@ -412,6 +452,15 @@ async function connectBattle(roomId: string) {
   }
   window.addEventListener('ws-send', wsSendHandler)
   ws.onMessage(dispatchMessage)
+  ws.onStatus((s) => {
+    const prev = wsStatus.value
+    wsStatus.value = s
+    if (s === 'reconnecting' && prev === 'open') {
+      pushToast('与服务器断开连接，正在尝试重连…', 'warn', 8000)
+    } else if (s === 'open' && prev === 'reconnecting') {
+      pushToast('已重新连接', 'info', 2500)
+    }
+  })
   ws.connect(roomId, auth.token!)
   loadBgForRoom(roomId)
 }
@@ -419,6 +468,7 @@ async function connectBattle(roomId: string) {
 function disconnectWs() {
   if (wsSendHandler) { window.removeEventListener('ws-send', wsSendHandler); wsSendHandler = null }
   if (ws) { ws.close(); ws = null }
+  wsStatus.value = 'closed'
   room.clear()
 }
 
@@ -459,9 +509,19 @@ function dispatchMessage(msg: ServerMessage) {
   else if (m.type === 'dice_result') {
     window.dispatchEvent(new CustomEvent('ws-dice-result', { detail: m.payload }))
   }
-  else if (m.type === 'error') {
-    console.warn('[server error]', m.payload?.message)
+  else if (m.type === 'item_used') {
+    pushToast(`${nameOfToken(m.payload.token_id)} 使用了「${m.payload.item}」`, 'info')
   }
+  else if (m.type === 'item_bought') {
+    pushToast(`${nameOfToken(m.payload.token_id)} 花了 ${m.payload.price} 金币买到「${m.payload.item}」`, 'info')
+  }
+  else if (m.type === 'error') {
+    pushToast(m.payload?.message || '操作失败', 'error')
+  }
+}
+
+function nameOfToken(tokenId: string): string {
+  return room.room?.tokens?.[tokenId]?.character_name || tokenId
 }
 
 // --- 落子 ---
@@ -489,7 +549,9 @@ function onCellClick(cell: { x: number; y: number; action?: string }) {
       return
     }
     if (cell.action === 'item') {
-      // TODO: 打开道具面板
+      // 还没有独立的道具面板；目前唯一能用道具的地方是右侧战斗面板的下拉框，
+      // 之前这里点了什么反应都没有，至少先引导过去，而不是悄无声息地什么都不做。
+      pushToast('请在右侧「战斗」面板中选择并使用道具', 'info')
       return
     }
   }
@@ -506,7 +568,7 @@ function onCellClick(cell: { x: number; y: number; action?: string }) {
       token_id: `tok_${auth.user?.id}`,
       x: cell.x, y: cell.y,
       character: {
-        name: c.name, gender: c.gender, profession: c.profession, talent: c.talent,
+        name: c.name, avatar_url: c.avatar_url, gender: c.gender, profession: c.profession, talent: c.talent,
         hp_base: c.hp_base, armor_base: c.armor_base, ap_base: c.ap_base, gold: c.gold,
         backpack: c.backpack, equipment_slots: c.equipment_slots, skill_slots: c.skill_slots,
         darkvision: c.darkvision, vision_range: c.vision_range,
@@ -521,6 +583,13 @@ function onCellClick(cell: { x: number; y: number; action?: string }) {
 }
 
 function onPath(path: [number, number][]) {
+  // 疾跑模式：交给 CombatPanel 自己处理（跟 attack 走同一套委托模式），
+  // 它会发 sprint 消息并把 mode 清掉——之前这里完全没判断 combatMode，
+  // 永远当成普通 move 发出去，疾跑按钮点了也没用，模式提示还永远不消失。
+  if (combatMode.value === 'sprint') {
+    combatRef.value?.onSprintPath(path)
+    return
+  }
   const targetId = selectedToken.value?.id || selfTokenId.value
   if (!targetId) return
   ws?.send({ type: 'move', payload: { token_id: targetId, path } })
@@ -549,6 +618,36 @@ function onTokenSize(tokenId: string, size: number) {
 const viewingToken = ref<any>(null)
 function onTokenDblClick(token: any) {
   viewingToken.value = token
+  itemStore.load()
+}
+
+function isOwnToken(token: any): boolean {
+  return !!token && token.id === selfTokenId.value
+}
+
+function itemInfo(name: string) {
+  return name ? itemStore.getByName(name) : undefined
+}
+
+function useViewedItem(itemName: string) {
+  if (!viewingToken.value) return
+  ws?.send({ type: 'use_item', payload: { token_id: viewingToken.value.id, item_name: itemName } })
+}
+
+function canBuy(itemName: string): boolean {
+  if (!selfTokenId.value) return false
+  const info = itemInfo(itemName)
+  if (!info || info.price <= 0) return false
+  const myGold = room.room?.tokens?.[selfTokenId.value]?.gold ?? 0
+  return myGold >= info.price
+}
+
+function buyFromShop(shopTokenId: string, itemName: string) {
+  if (!selfTokenId.value) return
+  ws?.send({
+    type: 'buy_item',
+    payload: { buyer_token_id: selfTokenId.value, shop_token_id: shopTokenId, item_name: itemName },
+  })
 }
 
 // --- 监听未落子时自动弹选角色卡 ---
@@ -633,7 +732,6 @@ onMounted(async () => {
 })
 
 // 监听 room 变化，自动触发落子提示
-import { watch } from 'vue'
 watch(() => room.room, (r) => {
   if (r) checkPlacementNeeded()
 })
@@ -654,6 +752,7 @@ onUnmounted(() => { disconnectWs() })
 .tag { padding: 2px 6px; border-radius: 3px; font-size: 11px; background: #3a7; color: #fff; margin-left: 6px; }
 .tag.admin { background: #fa0; }
 .actions { display: flex; gap: 8px; }
+.conn-banner { padding: 4px 16px; background: #7a3b00; color: #fff; font-size: 12px; text-align: center; }
 .actions button { padding: 6px 12px; background: #444; color: #fff; border: none;
   border-radius: 3px; cursor: pointer; font-size: 13px; }
 .actions button:hover { background: #555; }
@@ -720,6 +819,17 @@ onUnmounted(() => { disconnectWs() })
 :deep(.modal-body) .token-view .slot-val { color: #333; }
 :deep(.modal-body) .token-view .readonly-hint { margin-top: 12px; text-align: center;
   color: #bbb; font-size: 11px; }
+:deep(.modal-body) .token-view .backpack-item,
+:deep(.modal-body) .token-view .shop-item { flex-wrap: wrap; gap: 4px; align-items: center; }
+:deep(.modal-body) .token-view .item-desc { color: #999; font-size: 11px; flex: 1; }
+:deep(.modal-body) .token-view .use-btn,
+:deep(.modal-body) .token-view .buy-btn { padding: 2px 8px; font-size: 11px; border: none;
+  border-radius: 3px; cursor: pointer; background: #0f3460; color: #fff; }
+:deep(.modal-body) .token-view .buy-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+:deep(.modal-body) .token-view .section.shop h4 { display: flex; justify-content: space-between; align-items: center; }
+:deep(.modal-body) .token-view .section.shop .cp-hint { color: #3a7; font-size: 11px; font-weight: normal; }
+:deep(.modal-body) .token-view .price { color: #a70; font-size: 11px; white-space: nowrap; }
+:deep(.modal-body) .token-view .empty-hint { color: #bbb; font-size: 12px; text-align: center; padding: 8px 0; }
 
 .damage-flash { position: fixed; inset: 0; pointer-events: none; z-index: 9999;
   box-shadow: inset 0 0 80px rgba(200, 0, 0, 0.4); opacity: 0; transition: opacity 0.3s; }

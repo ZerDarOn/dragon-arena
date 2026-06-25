@@ -21,6 +21,8 @@ class ActorBase(BaseModel):
     equipment_slots: List[Optional[str]] = Field(default_factory=lambda: [None] * 6)
     skill_slots: List[Optional[str]] = Field(default_factory=lambda: [None, None])
     backpack: List[str] = Field(default_factory=list)
+    is_shop: bool = False          # 是否是商店型 NPC
+    shop_items: List[str] = Field(default_factory=list)  # 货架上的道具名（对应 Item.name）
 
 
 class ActorCreate(ActorBase):
@@ -44,6 +46,8 @@ class ActorUpdate(BaseModel):
     equipment_slots: Optional[List[Optional[str]]] = None
     skill_slots: Optional[List[Optional[str]]] = None
     backpack: Optional[List[str]] = None
+    is_shop: Optional[bool] = None
+    shop_items: Optional[List[str]] = None
 
 
 class ActorOut(ActorBase):

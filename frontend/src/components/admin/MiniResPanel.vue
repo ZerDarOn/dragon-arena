@@ -166,7 +166,7 @@ async function onAvatarUpload(e: Event) {
   const form = new FormData()
   form.append('file', file)
   try {
-    const r = await fetch('http://localhost:8000/api/upload/avatar', {
+    const r = await fetch(`http://${window.location.hostname}:8000/api/upload/avatar`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
       body: form,

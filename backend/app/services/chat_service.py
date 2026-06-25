@@ -20,13 +20,19 @@ class ChatService:
         return None
 
     def send(self, sender_player_id: str, channel: str, text: str = "",
-             target_player: Optional[str] = None) -> Optional[ChatMessage]:
+             target_player: Optional[str] = None, is_admin: bool = False) -> Optional[ChatMessage]:
         if channel in ("spatial_normal", "spatial_shout"):
             return self._send_spatial(sender_player_id, channel, text)
         if channel == "hall":
             return self._send_broadcast(sender_player_id, "hall", text)
         if channel == "battle":
             return self._send_broadcast(sender_player_id, "battle", text)
+        if channel == "war_hall":
+            # 团主公告频道：只广播，且只有管理员能发——前端已经把输入框隐藏给非管理员，
+            # 这里加一道服务端校验，防止有人直接发 WS 消息绕过去。
+            if not is_admin:
+                return None
+            return self._send_broadcast(sender_player_id, "war_hall", text)
         if channel == "private" and target_player:
             return self._send_private(sender_player_id, target_player, text)
         return None
@@ -53,6 +59,7 @@ class ChatService:
         radius = (self.cfg.speak_radius * self.cfg.shout_multiplier) if is_shout else self.cfg.speak_radius
         origin = (sender_token.position["x"], sender_token.position["y"])
         recipients = []
+        farthest_dist = 0
         for other in self.room.tokens.values():
             if other.owner_id == sender_player_id or other.is_dead or not other.position:
                 continue
@@ -63,11 +70,12 @@ class ChatService:
             if not self.cfg.sound_through_wall and has_wall_between(self.map, origin, target_pos):
                 continue
             recipients.append(other.owner_id)
+            farthest_dist = max(farthest_dist, dist)
         # 衰减：距离越远，声音越小（模拟）
         attenuation = min(1.0, radius / max(1, self.cfg.speak_radius))
         return ChatMessage(
             id=str(uuid.uuid4()), sender_id=sender_player_id, channel=channel,
             content_type="text", text=text, recipients=recipients,
             timestamp=int(time.time() * 1000),
-            extra={"attenuation": attenuation, "distance": dist, "is_shout": is_shout},
+            extra={"attenuation": attenuation, "distance": farthest_dist, "is_shout": is_shout},
         )

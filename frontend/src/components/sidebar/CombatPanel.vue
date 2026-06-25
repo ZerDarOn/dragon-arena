@@ -122,7 +122,9 @@ const selfToken = computed(() => {
 })
 
 const isMyTurn = computed(() => {
-  return room.value?.current_actor === self.playerId
+  // current_actor 是 token_id，不是 player_id —— 之前拿 playerId 直接比较，
+  // 永远不可能相等，导致回合制下整个攻击/防御/疾跑/结束回合面板永远不出现。
+  return !!selfToken.value && room.value?.current_actor === selfToken.value.id
 })
 
 const usableItems = computed(() => {

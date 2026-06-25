@@ -90,7 +90,7 @@
       <input type="range" v-model.number="w" min="10" max="80" @change="emitResize" />
       <label>高度 <code>{{ h }}</code></label>
       <input type="range" v-model.number="h" min="10" max="80" @change="emitResize" />
-      <p class="warn">调整尺寸会清空超界区域的地形/棋子</p>
+      <p class="warn">⚠ 调整尺寸会清空整张地图已绘制的地形（不只是超界区域），且不可撤销</p>
     </div>
   </div>
 </template>
@@ -151,6 +151,9 @@ function doFill() {
 // Map size
 const w = ref(30); const h = ref(30)
 function emitResize() {
+  if (!confirm('调整地图尺寸会清空整张地图已绘制的全部地形（墙/草/水/光源/黑暗），且不可撤销，确定继续吗？')) {
+    return
+  }
   emit('resize', w.value, h.value)
 }
 

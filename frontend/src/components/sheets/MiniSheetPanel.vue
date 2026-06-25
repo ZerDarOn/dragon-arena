@@ -14,7 +14,10 @@
            @dragend="dragId = null"
            @click="$emit('edit', s)"
            :title="`拖拽「${s.name}」到地图`">
-        <div class="avatar">{{ s.name[0] || '?' }}</div>
+        <div class="avatar">
+          <img v-if="s.avatar_url" :src="s.avatar_url" alt="" />
+          <span v-else>{{ s.name[0] || '?' }}</span>
+        </div>
         <div class="info">
           <div class="name">{{ s.name || '未命名' }}</div>
           <div class="meta">{{ s.profession }} · HP{{ s.hp_base }} · 甲{{ s.armor_base }}</div>
@@ -30,6 +33,7 @@
 import { ref, onMounted } from 'vue'
 import { listMyCharacters, listAllCharacters } from '../../api/rest'
 import { useAuthStore } from '../../stores/auth'
+import type { CharacterSheet } from '../../api/types'
 
 const auth = useAuthStore()
 const sheets = ref<CharacterSheet[]>([])
@@ -52,7 +56,7 @@ async function load() {
 function onDragStart(e: DragEvent, s: CharacterSheet) {
   dragId.value = s.id
   e.dataTransfer?.setData('application/json', JSON.stringify({
-    kind: 'character_sheet', sheet_id: s.id, name: s.name,
+    kind: 'character_sheet', sheet: s,
   }))
   e.dataTransfer!.effectAllowed = 'copy'
 }
@@ -80,7 +84,8 @@ defineEmits<{
 .mini-card.dragging { opacity: 0.5; background: #e8f5e9; }
 .avatar { width: 32px; height: 32px; border-radius: 50%; background: #3a7;
   color: #fff; display: flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 600; flex-shrink: 0; }
+  font-size: 14px; font-weight: 600; flex-shrink: 0; overflow: hidden; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; }
 .info { flex: 1; min-width: 0; }
 .name { font-size: 13px; font-weight: 600; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meta { font-size: 11px; color: #888; margin-top: 1px; }

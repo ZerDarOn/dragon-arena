@@ -88,7 +88,7 @@
     <!-- 角色卡模板（Actor 库）-->
     <div v-if="active === 'actors'" class="panel">
       <div class="add-form">
-        <button @click="showActorForm = true" class="add-btn">+ 新建角色</button>
+        <button @click="newActor" class="add-btn">+ 新建角色</button>
         <input v-model="actorFilter" placeholder="搜索..." class="search-input" />
       </div>
       <div v-if="actorStore.actors.length === 0" class="empty">暂无角色卡模板<br/><small>新建后可拖拽到地图生成 Token</small></div>
@@ -143,9 +143,75 @@
             <label>被动觉察 <input v-model.number="actorForm.passive_perception" type="number" /></label>
             <label>潜行 <input v-model.number="actorForm.stealth" type="number" /></label>
           </div>
+          <div v-if="actorForm.type === 'npc'" class="shop-config">
+            <label class="mini-check">
+              <input type="checkbox" v-model="actorForm.is_shop" /> 这是一个商店（玩家可以跟它买道具）
+            </label>
+            <div v-if="actorForm.is_shop" class="shop-items-pick">
+              <p class="hint">货架（点击道具加入/移出，没有价格的道具不会显示出来给玩家买）</p>
+              <div class="chip-pool">
+                <span v-for="i in itemStore.items" :key="i.id" class="chip pick"
+                      :class="{ active: actorForm.shop_items?.includes(i.name) }"
+                      @click="toggleShopItem(i.name)">
+                  {{ i.name }}<span v-if="i.price <= 0"> (未标价)</span>
+                </span>
+                <span v-if="!itemStore.items.length" class="empty">道具库是空的，先去"道具库"标签建几个道具</span>
+              </div>
+            </div>
+          </div>
           <div class="form-actions">
             <button @click="saveActor" class="save-btn">保存</button>
             <button @click="showActorForm = false" class="cancel-btn">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 道具库 -->
+    <div v-if="active === 'items'" class="panel">
+      <div class="add-form">
+        <button @click="newItem" class="add-btn">+ 新建道具</button>
+        <input v-model="itemFilter" placeholder="搜索..." class="search-input" />
+      </div>
+      <div v-if="itemStore.items.length === 0" class="empty">暂无道具<br/><small>新建后可以挂在 NPC 商店货架上出售</small></div>
+      <ul class="actor-list">
+        <li v-for="i in filteredItems" :key="i.id" class="actor-card" @click="editItem(i)">
+          <img v-if="i.icon_url" :src="i.icon_url" class="actor-avatar" />
+          <div v-else class="actor-avatar placeholder">{{ i.name[0] }}</div>
+          <div class="actor-info">
+            <div class="actor-name">{{ i.name }} <span class="badge">{{ categoryLabel(i.category) }}</span></div>
+            <div class="actor-meta">{{ i.description || '无描述' }} · {{ i.price > 0 ? i.price + ' 金币' : '不可购买' }}</div>
+          </div>
+          <div class="actor-actions">
+            <button class="mini-btn danger" @click.stop="deleteItem(i.id)">删</button>
+          </div>
+        </li>
+      </ul>
+
+      <div v-if="showItemForm" class="modal-overlay" @click.self="showItemForm = false">
+        <div class="modal-box">
+          <h3>{{ editingItem ? '编辑道具' : '新建道具' }}</h3>
+          <div class="form-grid">
+            <label>名称 <input v-model="itemForm.name" /></label>
+            <label>分类
+              <select v-model="itemForm.category">
+                <option value="weapon">武器</option>
+                <option value="armor">护甲</option>
+                <option value="consumable">消耗品</option>
+                <option value="skill">技能</option>
+                <option value="misc">杂项</option>
+              </select>
+            </label>
+            <label>价格（0=不可购买） <input v-model.number="itemForm.price" type="number" /></label>
+            <label>图标URL <input v-model="itemForm.icon_url" placeholder="可选" /></label>
+            <label style="grid-column: 1 / -1">描述 <input v-model="itemForm.description" /></label>
+            <label style="grid-column: 1 / -1">效果说明（团主参考，系统不解析）
+              <input v-model="itemForm.effect_text" />
+            </label>
+          </div>
+          <div class="form-actions">
+            <button @click="saveItem" class="save-btn">保存</button>
+            <button @click="showItemForm = false" class="cancel-btn">取消</button>
           </div>
         </div>
       </div>
@@ -179,15 +245,18 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { listAllCharacters } from '../../api/rest'
-import type { CharacterSheet, Actor, ActorCreate } from '../../api/types'
+import type { CharacterSheet, Actor, ActorCreate, Item, ItemCreate } from '../../api/types'
 import { monsters, equips, objects } from '../../stores/resources'
 import { useActorStore } from '../../stores/actors'
+import { useItemStore } from '../../stores/items'
 
 const actorStore = useActorStore()
+const itemStore = useItemStore()
 
 const tabs = [
   { key: 'sheets', label: '角色卡库' },
   { key: 'actors', label: '角色模板' },
+  { key: 'items', label: '道具库' },
   { key: 'monsters', label: '怪物模板' },
   { key: 'equip', label: '装备池' },
   { key: 'objects', label: '物件' },
@@ -248,7 +317,15 @@ const actorForm = ref<ActorCreate>({
   name: '', type: 'monster', hp: 100, max_hp: 100, armor: 5,
   ap: 2, max_ap: 2, vision_range: 8, darkvision: 0,
   listen_radius: 6, passive_perception: 10, stealth: 0,
+  is_shop: false, shop_items: [],
 })
+
+function toggleShopItem(name: string) {
+  const list = actorForm.value.shop_items || (actorForm.value.shop_items = [])
+  const idx = list.indexOf(name)
+  if (idx >= 0) list.splice(idx, 1)
+  else list.push(name)
+}
 
 const dragActorId = ref<string | null>(null)
 
@@ -262,9 +339,20 @@ function typeLabel(t: string) {
   return { player: '玩家', npc: 'NPC', monster: '怪物' }[t] || t
 }
 
+function newActor() {
+  editingActor.value = null
+  actorForm.value = {
+    name: '', type: 'monster', hp: 100, max_hp: 100, armor: 5,
+    ap: 2, max_ap: 2, vision_range: 8, darkvision: 0,
+    listen_radius: 6, passive_perception: 10, stealth: 0,
+    is_shop: false, shop_items: [],
+  }
+  showActorForm.value = true
+}
+
 function editActor(a: Actor) {
   editingActor.value = a
-  actorForm.value = { name: a.name, type: a.type as any, avatar_url: a.avatar_url, hp: a.hp, max_hp: a.max_hp, armor: a.armor, ap: a.ap, max_ap: a.max_ap, vision_range: a.vision_range, darkvision: a.darkvision, listen_radius: a.listen_radius, passive_perception: a.passive_perception, stealth: a.stealth }
+  actorForm.value = { name: a.name, type: a.type as any, avatar_url: a.avatar_url, hp: a.hp, max_hp: a.max_hp, armor: a.armor, ap: a.ap, max_ap: a.max_ap, vision_range: a.vision_range, darkvision: a.darkvision, listen_radius: a.listen_radius, passive_perception: a.passive_perception, stealth: a.stealth, is_shop: a.is_shop, shop_items: [...(a.shop_items || [])] }
   showActorForm.value = true
 }
 
@@ -306,7 +394,7 @@ async function onAvatarUpload(e: Event) {
   const form = new FormData()
   form.append('file', file)
   try {
-    const r = await fetch('http://localhost:8000/api/upload/avatar', {
+    const r = await fetch(`http://${window.location.hostname}:8000/api/upload/avatar`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
       body: form,
@@ -321,9 +409,59 @@ async function onAvatarUpload(e: Event) {
   }
 }
 
+// ---- 道具库 ----
+const itemFilter = ref('')
+const showItemForm = ref(false)
+const editingItem = ref<Item | null>(null)
+const emptyItemForm = (): ItemCreate => ({
+  name: '', category: 'misc', description: '', effect_text: '', price: 0, icon_url: '',
+})
+const itemForm = ref<ItemCreate>(emptyItemForm())
+
+const filteredItems = computed(() => {
+  if (!itemFilter.value) return itemStore.items
+  const q = itemFilter.value.toLowerCase()
+  return itemStore.items.filter(i => i.name.toLowerCase().includes(q))
+})
+
+function categoryLabel(c: string) {
+  return { weapon: '武器', armor: '护甲', consumable: '消耗品', skill: '技能', misc: '杂项' }[c] || c
+}
+
+function newItem() {
+  editingItem.value = null
+  itemForm.value = emptyItemForm()
+  showItemForm.value = true
+}
+
+function editItem(i: Item) {
+  editingItem.value = i
+  itemForm.value = {
+    name: i.name, category: i.category, description: i.description,
+    effect_text: i.effect_text, price: i.price, icon_url: i.icon_url,
+  }
+  showItemForm.value = true
+}
+
+async function saveItem() {
+  if (!itemForm.value.name.trim()) return
+  if (editingItem.value) {
+    await itemStore.update(editingItem.value.id, itemForm.value)
+  } else {
+    await itemStore.create(itemForm.value)
+  }
+  showItemForm.value = false
+  editingItem.value = null
+}
+
+async function deleteItem(id: string) {
+  await itemStore.remove(id)
+}
+
 onMounted(() => {
   loadSheets()
   actorStore.load()
+  itemStore.load()
 })
 </script>
 
@@ -361,6 +499,11 @@ onMounted(() => {
   border: none; border-radius: 3px; cursor: pointer; font-size: 12px; }
 .mini-check { font-size: 11px; display: flex; align-items: center; gap: 2px; }
 .mini-check input { width: auto; }
+.shop-config { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ddd; }
+.shop-items-pick { margin-top: 6px; }
+.shop-items-pick .hint { font-size: 11px; color: #888; margin: 0 0 6px; }
+.chip.pick { cursor: pointer; }
+.chip.pick.active { background: #0a7; border-color: #0a7; color: #fff; }
 .chip-pool { display: flex; flex-wrap: wrap; gap: 4px; }
 .chip.removable { cursor: pointer; background: #fee; border-color: #fcc; }
 .chip.removable:hover { background: #fcc; }

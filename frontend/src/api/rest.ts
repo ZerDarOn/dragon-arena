@@ -1,7 +1,9 @@
 import { useAuthStore } from '../stores/auth'
 import type { LoginResponse, UserPublic, CharacterSheet } from './types'
 
-const API = 'http://localhost:8000'
+// 跟 api/ws.ts 保持一致：跟着当前访问的 host 走，而不是硬编码 localhost。
+// 否则局域网内其他设备访问前端时，WS 能连上但所有 REST 请求都会打到它们自己的本机，永远连不上。
+const API = `http://${window.location.hostname}:8000`
 
 function authHeaders(): Record<string, string> {
   const auth = useAuthStore()

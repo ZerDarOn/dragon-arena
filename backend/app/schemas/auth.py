@@ -43,6 +43,7 @@ class CharacterSheet(BaseModel):
     id: str
     owner_id: str
     name: str
+    avatar_url: Optional[str] = None
     gender: str = ""
     profession: str = ""
     talent: str = ""
@@ -69,6 +70,7 @@ class CharacterSheetPublic(BaseModel):
     id: str
     owner_id: str
     name: str
+    avatar_url: Optional[str] = None
     gender: str = ""
     profession: str = ""
     talent: str = ""
@@ -90,6 +92,7 @@ class CharacterSheetPublic(BaseModel):
 
 class CreateCharacterRequest(BaseModel):
     name: str
+    avatar_url: Optional[str] = None
     gender: str = ""
     profession: str = ""
     talent: str = ""
@@ -118,7 +121,7 @@ def to_public(user: User) -> UserPublic:
 def sheet_to_public(sheet: CharacterSheet) -> CharacterSheetPublic:
     """Strip secret_backups for non-owner/admin viewers."""
     return CharacterSheetPublic(
-        id=sheet.id, owner_id=sheet.owner_id, name=sheet.name,
+        id=sheet.id, owner_id=sheet.owner_id, name=sheet.name, avatar_url=sheet.avatar_url,
         gender=sheet.gender, profession=sheet.profession, talent=sheet.talent,
         hp_base=sheet.hp_base, armor_base=sheet.armor_base, ap_base=sheet.ap_base,
         gold=sheet.gold, backpack=sheet.backpack,
