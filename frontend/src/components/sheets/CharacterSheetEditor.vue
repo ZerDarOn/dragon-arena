@@ -43,9 +43,9 @@
         <section class="block">
           <h5>基础属性 <span class="cp-hint" :class="{ 'cp-over': usedCP > 30 }">(创造点上限 30，已用 {{ usedCP }}，剩余 {{ 30 - usedCP }})</span></h5>
           <div class="grid-nums">
-            <label>生命<input type="number" v-model.number="editing.hp_base" /></label>
-            <label>护甲<input type="number" v-model.number="editing.armor_base" /></label>
-            <label>行动点<input type="number" v-model.number="editing.ap_base" /></label>
+            <label>生命<input type="number" v-model.number="editing.hp_base" @change="clampCP('hp_base', 100, 10)" /></label>
+            <label>护甲<input type="number" v-model.number="editing.armor_base" @change="clampCP('armor_base', 5, 1)" /></label>
+            <label>行动点<input type="number" v-model.number="editing.ap_base" @change="clampCP('ap_base', 2, 5)" /></label>
             <label>起始金币<input type="number" v-model.number="editing.gold" /></label>
           </div>
         </section>
@@ -177,6 +177,21 @@ const usedCP = computed(() => {
   const e = editing.value
   return Math.max(0, (e.hp_base - 100) / 10 + (e.armor_base - 5) + (e.ap_base - 2) * 5)
 })
+
+// 输入级 CP 硬校验：如果当前值导致超限，自动回退到不超的最大值
+function clampCP(field: 'hp_base' | 'armor_base' | 'ap_base', base: number, costPerUnit: number) {
+  if (!editing.value) return
+  const e = editing.value
+  const val = e[field]
+  if (val <= base) return // 低于基础值不收费，无需限制
+  const currentCP = (e.hp_base - 100) / 10 + (e.armor_base - 5) + (e.ap_base - 2) * 5
+  if (currentCP > 30) {
+    const over = currentCP - 30
+    const maxIncrease = Math.max(0, val - base - Math.ceil(over * costPerUnit) / costPerUnit)
+    e[field] = Math.max(base, Math.floor(base + maxIncrease))
+    error.value = `创造点上限 30，已用 ${usedCP.value}。${field === 'hp_base' ? '生命' : field === 'armor_base' ? '护甲' : '行动点'}已自动调整。`
+  }
+}
 
 async function load() {
   loading.value = true

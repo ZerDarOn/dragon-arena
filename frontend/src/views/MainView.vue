@@ -309,7 +309,7 @@ watch(() => dmRef.value?.paintMode, (mode) => {
 
 // Actor 拖拽到地图生成 Token
 function onSpawnActor(payload: { actor_id: string; x: number; y: number }) {
-  ws?.send({
+  wsSend({
     type: 'spawn_token',
     payload: { actor_id: payload.actor_id, x: payload.x, y: payload.y },
   })
@@ -319,7 +319,7 @@ function onSpawnSheet(payload: { sheet: CharacterSheet; x: number; y: number }) 
   const c = payload.sheet
   // 用 owner_id（角色卡真正的归属玩家）拼 token_id，跟玩家自己点格子落子时
   // 用的方案一致（tok_<ownerId>），否则同一个人会因为落子路径不同而冒出两个 token。
-  ws?.send({
+  wsSend({
     type: 'place_token',
     payload: {
       token_id: `tok_${c.owner_id}`,
@@ -340,7 +340,117 @@ function onSpawnSheet(payload: { sheet: CharacterSheet; x: number; y: number }) 
   })
 }
 
-function wsSend(msg: any) { ws?.send(msg) }
+function wsSend(msg: any) { 
+  applyOptimisticUpdate(msg)
+  ws?.send(msg) 
+}
+
+// 乐观更新：发送消息前立即修改本地 store，下次 state_sync 会覆盖为权威状态
+function applyOptimisticUpdate(msg: any) {
+  if (!room.room) return
+  const r = room.room
+  const p = msg.payload
+  switch (msg.type) {
+    case 'move': {
+      const t = r.tokens[p.token_id]
+      if (t && p.path.length > 0) {
+        const [x, y] = p.path[p.path.length - 1]
+        t.position = { x, y }
+      }
+      break
+    }
+    case 'modify_value': {
+      const t = r.tokens[p.token_id]
+      if (t) {
+        const field = p.field as keyof typeof t
+        const val = (t as any)[field]
+        if (typeof val === 'number') {
+          (t as any)[field] = Math.max(0, val + p.delta)
+        }
+      }
+      break
+    }
+    case 'add_state': {
+      const t = r.tokens[p.token_id]
+      if (t) {
+        t.states.push({
+          id: `opt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          name: p.name,
+          description: p.description,
+          ttl: p.ttl,
+        })
+      }
+      break
+    }
+    case 'defend': {
+      const t = r.tokens[p.token_id]
+      if (t) {
+        t.ap = Math.max(0, t.ap - (r.config.defend_ap_cost || 1))
+      }
+      break
+    }
+    case 'sprint': {
+      const t = r.tokens[p.token_id]
+      if (t && p.path.length > 0) {
+        const [x, y] = p.path[p.path.length - 1]
+        t.position = { x, y }
+        t.ap = Math.max(0, t.ap - (r.config.sprint_ap_cost || 2))
+      }
+      break
+    }
+    case 'use_item': {
+      const t = r.tokens[p.token_id]
+      if (t) {
+        const idx = t.backpack.indexOf(p.item_name)
+        if (idx >= 0) t.backpack.splice(idx, 1)
+      }
+      break
+    }
+    case 'buy_item': {
+      const t = r.tokens[p.buyer_token_id]
+      if (t) {
+        const info = itemStore.getByName(p.item_name)
+        const price = info?.price || 0
+        t.gold = Math.max(0, t.gold - price)
+        t.backpack.push(p.item_name)
+      }
+      break
+    }
+    case 'rotate_token': {
+      const t = r.tokens[p.token_id]
+      if (t) t.facing = p.facing
+      break
+    }
+    case 'size_token': {
+      const t = r.tokens[p.token_id]
+      if (t) t.size = Math.max(1, Math.min(4, p.size))
+      break
+    }
+    case 'end_turn': {
+      // 不乐观更新回合状态，等服务器同步
+      break
+    }
+    case 'attack': {
+      // 攻击涉及骰子和伤害计算，不乐观更新
+      break
+    }
+    // 管理员操作：不乐观更新，等服务器同步
+    case 'place_token':
+    case 'spawn_token':
+    case 'set_terrain':
+    case 'set_cell_meta':
+    case 'fill_terrain':
+    case 'resize_map':
+    case 'set_poison_circle':
+    case 'set_fog_of_war':
+    case 'set_turn_order':
+    case 'shuffle_turn_order':
+    case 'force_set_actor':
+    case 'clear_combat_log':
+    case 'start_game':
+      break
+  }
+}
 
 function onCombatMode(mode: 'attack' | 'sprint' | null) {
   combatMode.value = mode
@@ -448,7 +558,7 @@ async function connectBattle(roomId: string) {
   ws = new WSClient()
   wsSendHandler = (e: Event) => {
     const detail = (e as CustomEvent).detail
-    ws?.send(detail)
+    wsSend(detail)
   }
   window.addEventListener('ws-send', wsSendHandler)
   ws.onMessage(dispatchMessage)
@@ -562,7 +672,7 @@ function onCellClick(cell: { x: number; y: number; action?: string }) {
   // 玩家落子
   if (!selectedCharacter.value || selfTokenId.value) return
   const c = selectedCharacter.value
-  ws?.send({
+  wsSend({
     type: 'place_token',
     payload: {
       token_id: `tok_${auth.user?.id}`,
@@ -592,7 +702,7 @@ function onPath(path: [number, number][]) {
   }
   const targetId = selectedToken.value?.id || selfTokenId.value
   if (!targetId) return
-  ws?.send({ type: 'move', payload: { token_id: targetId, path } })
+  wsSend({ type: 'move', payload: { token_id: targetId, path } })
 }
 
 function onTokenSelected(t: any) {
@@ -608,11 +718,11 @@ function onTokenSelected(t: any) {
 }
 
 function onTokenRotate(tokenId: string, facing: number) {
-  ws?.send({ type: 'rotate_token', payload: { token_id: tokenId, facing } })
+  wsSend({ type: 'rotate_token', payload: { token_id: tokenId, facing } })
 }
 
 function onTokenSize(tokenId: string, size: number) {
-  ws?.send({ type: 'size_token', payload: { token_id: tokenId, size } })
+  wsSend({ type: 'size_token', payload: { token_id: tokenId, size } })
 }
 
 const viewingToken = ref<any>(null)
@@ -631,7 +741,7 @@ function itemInfo(name: string) {
 
 function useViewedItem(itemName: string) {
   if (!viewingToken.value) return
-  ws?.send({ type: 'use_item', payload: { token_id: viewingToken.value.id, item_name: itemName } })
+  wsSend({ type: 'use_item', payload: { token_id: viewingToken.value.id, item_name: itemName } })
 }
 
 function canBuy(itemName: string): boolean {
@@ -644,7 +754,7 @@ function canBuy(itemName: string): boolean {
 
 function buyFromShop(shopTokenId: string, itemName: string) {
   if (!selfTokenId.value) return
-  ws?.send({
+  wsSend({
     type: 'buy_item',
     payload: { buyer_token_id: selfTokenId.value, shop_token_id: shopTokenId, item_name: itemName },
   })
@@ -665,31 +775,31 @@ function onLogout() {
 
 // --- DM 工具回调 ---
 function onSetPoisonCircle(cfg: { center_x: number; center_y: number; radius: number; enabled: boolean }) {
-  ws?.send({ type: 'set_poison_circle', payload: cfg })
+  wsSend({ type: 'set_poison_circle', payload: cfg })
 }
 
 function onSetFogOfWar(enabled: boolean) {
-  ws?.send({ type: 'set_fog_of_war', payload: { enabled } })
+  wsSend({ type: 'set_fog_of_war', payload: { enabled } })
 }
 
 function onSetTurnOrder(order: string[]) {
-  ws?.send({ type: 'set_turn_order', payload: { order } })
+  wsSend({ type: 'set_turn_order', payload: { order } })
 }
 function onShuffleTurn() {
-  ws?.send({ type: 'shuffle_turn_order', payload: {} })
+  wsSend({ type: 'shuffle_turn_order', payload: {} })
 }
 function onForceActor(tokenId: string) {
-  ws?.send({ type: 'force_set_actor', payload: { token_id: tokenId } })
+  wsSend({ type: 'force_set_actor', payload: { token_id: tokenId } })
 }
 function onClearCombatLog() {
-  ws?.send({ type: 'clear_combat_log', payload: {} })
+  wsSend({ type: 'clear_combat_log', payload: {} })
 }
 
 function onMapResize(w: number, h: number) {
-  ws?.send({ type: 'resize_map', payload: { width: w, height: h } })
+  wsSend({ type: 'resize_map', payload: { width: w, height: h } })
 }
 function onFillArea(area: { x1: number; y1: number; x2: number; y2: number; type: string }) {
-  ws?.send({ type: 'fill_terrain', payload: area })
+  wsSend({ type: 'fill_terrain', payload: area })
 }
 
 // --- 底图导入（本地存储，按 roomId）---

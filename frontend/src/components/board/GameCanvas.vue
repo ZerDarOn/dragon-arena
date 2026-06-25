@@ -428,7 +428,7 @@ function draw() {
         ctx.fillStyle = hpRatio > 0.5 ? '#3a7' : (hpRatio > 0.25 ? '#fa0' : '#c33')
         ctx.fillRect(t.position.x*CELL+2, t.position.y*CELL + CELL*tkSize - 5, barW * hpRatio, 3)
       }
-      // Phase 2: 状态图标（token 右上角小圆点）
+      // Phase 2: 状态图标（token 右上角小圆点 + TTL）
       if (!isDead && t.states && t.states.length > 0) {
         const badgeR = 5
         const startX = t.position.x * CELL + CELL * tkSize - badgeR - 2
@@ -452,6 +452,13 @@ function draw() {
           ctx.font = `bold ${badgeR + 3}px sans-serif`
           ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
           ctx.fillText(label, bx, startY + 0.5)
+          // TTL 小字（badge 下方）
+          if (s.ttl > 0) {
+            ctx.fillStyle = 'rgba(255,255,255,0.9)'
+            ctx.font = 'bold 7px sans-serif'
+            ctx.textAlign = 'center'
+            ctx.fillText(String(s.ttl), bx, startY + badgeR + 6)
+          }
         }
       }
     }
