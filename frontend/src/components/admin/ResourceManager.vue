@@ -278,6 +278,8 @@
               <span v-for="(v, k) in e.fields" :key="k"><b>{{ k }}：</b>{{ v || '—' }}</span>
             </div>
             <p v-if="e.note" class="lib-note">备注：{{ e.note }}</p>
+            <button v-if="canManageLibrary && (e.category === 'monster' || e.category === 'npc')"
+                    class="mini-btn convert-btn" @click.stop="convertToActor(e)">→ 转为角色模板（可拖到地图）</button>
           </div>
         </li>
         <li v-if="!filteredLibrary.length" class="empty">无匹配条目</li>
@@ -631,6 +633,24 @@ async function loadLibrary() {
 function toggleLib(id: string) {
   expandedLib.value = expandedLib.value === id ? null : id
 }
+// 把内容库的怪物/NPC 条目转成 Actor 角色模板 → 之后可在「角色模板」Tab 拖到地图落子
+async function convertToActor(e: LibraryEntry) {
+  const num = (k: string) => parseInt(e.fields[k] || '', 10) || 0
+  let hp = 100, armor = 5
+  if (e.category === 'monster') { hp = num('生命') || 100; armor = num('护甲') }
+  else if (e.category === 'npc') {
+    const [h, a] = (e.fields['生命/护甲'] || '').split('/')
+    hp = parseInt(h) || 100; armor = parseInt(a) || 0
+  }
+  try {
+    await actorStore.create({
+      name: e.name, type: e.category === 'npc' ? 'npc' : 'monster',
+      hp, max_hp: hp, armor, ap: 2, max_ap: 2,
+      vision_range: 8, darkvision: 0, listen_radius: 6, passive_perception: 10, stealth: 0,
+    })
+    pushToast(`「${e.name}」已加入角色模板，去「角色模板」Tab 拖到地图`, 'info')
+  } catch { pushToast('转换失败', 'error') }
+}
 const filteredLibrary = computed(() => {
   const q = libFilter.value.trim().toLowerCase()
   return libEntries.value.filter((e) =>
@@ -828,6 +848,7 @@ onUnmounted(() => window.removeEventListener('sheets-changed', onSheetsChanged))
 .lib-list .meta { display: block; margin-top: 2px; white-space: normal; }
 .kv b { color: #666; font-weight: 600; }
 .lib-note { margin: 4px 0 0; font-size: 11px; color: #888; }
+.convert-btn { margin-top: 6px; background: #0a7; color: #fff; border-color: #0a7; }
 .lib-io { padding: 4px 8px; font-size: 12px; background: #0f3460; color: #fff; border: none;
   border-radius: 3px; cursor: pointer; white-space: nowrap; }
 .lib-io:disabled { background: #ccc; cursor: not-allowed; }
