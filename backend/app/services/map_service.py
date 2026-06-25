@@ -32,6 +32,11 @@ class MapService:
             return
         self.map.terrain[y][x].is_dark = is_dark
 
+    def set_darkness_strength(self, x: int, y: int, strength: float) -> None:
+        if not self._in_bounds(x, y):
+            return
+        self.map.terrain[y][x].darkness_strength = max(0.0, min(1.0, strength))
+
     def set_light(self, x: int, y: int, radius: int) -> None:
         """设光源：radius>0 点亮周围，radius=0 移除光源"""
         if not self._in_bounds(x, y):

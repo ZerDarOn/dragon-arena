@@ -11,9 +11,19 @@
         <button v-for="m in paintModes" :key="m.v" @click="paintMode = m.v"
                 :class="{ active: paintMode === m.v }">{{ m.l }}</button>
       </div>
-      <div class="brush-row">
-        <button v-for="t in types" :key="t.v" @click="selected = t.v"
-                :class="{ active: selected === t.v }">{{ t.l }}</button>
+      <div class="brush-group">
+        <label>地貌</label>
+        <div class="brush-row">
+          <button v-for="t in terrainTypes" :key="t.v" @click="selected = t.v"
+                  :class="{ active: selected === t.v }">{{ t.l }}</button>
+        </div>
+      </div>
+      <div class="brush-group">
+        <label>环境</label>
+        <div class="brush-row">
+          <button v-for="t in envTypes" :key="t.v" @click="selected = t.v"
+                  :class="{ active: selected === t.v }">{{ t.l }}</button>
+        </div>
       </div>
       <div class="fill-tool">
         <label>批量填充</label>
@@ -121,12 +131,18 @@ const tabs = [
 // Terrain brush
 const selected = ref('')
 const lightRadius = ref(3)  // 光源笔刷半径
-const types = [
-  { v: '', l: '关闭' }, { v: 'flat', l: '平地' }, { v: 'wall', l: '墙' },
+const terrainTypes = [
+  { v: '', l: '关闭' },
+  { v: 'flat', l: '平地' }, { v: 'wall', l: '墙' },
   { v: 'grass', l: '草丛' }, { v: 'water', l: '水' }, { v: 'high', l: '高地' },
-  { v: 'dark', l: '黑暗' }, { v: 'light', l: '光源' }, { v: 'clear_meta', l: '清黑暗/光' },
 ]
-const typeLabel = computed(() => types.find((t) => t.v === selected.value)?.l ?? '')
+const envTypes = [
+  { v: 'dark', l: '黑暗' }, { v: 'light', l: '光源' }, { v: 'clear_meta', l: '清暗/光' },
+]
+const typeLabel = computed(() => {
+  const all = [...terrainTypes, ...envTypes]
+  return all.find((t) => t.v === selected.value)?.l ?? ''
+})
 
 // 笔刷模式
 const paintMode = ref<'single' | 'line' | 'rect'>('single')
@@ -208,10 +224,13 @@ defineExpose({
   font-size: 12px; border-bottom: 2px solid transparent; }
 .tabs button.active { background: #fff; border-bottom-color: #fa0; font-weight: bold; }
 .panel { padding: 8px; }
-.brush-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.brush-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .brush-row button { padding: 4px 8px; border: 1px solid #ccc; background: #fff;
   border-radius: 3px; cursor: pointer; font-size: 11px; }
 .brush-row button.active { background: #fa0; color: #fff; border-color: #fa0; }
+.brush-group { margin-bottom: 8px; }
+.brush-group > label { display: block; font-size: 10px; color: #888; margin-bottom: 4px;
+  text-transform: uppercase; letter-spacing: 0.5px; }
 .paint-modes { display: flex; gap: 4px; margin-bottom: 8px; }
 .paint-modes button { padding: 3px 8px; border: 1px solid #ccc; background: #fff; border-radius: 3px; cursor: pointer; font-size: 11px; }
 .paint-modes button.active { background: #0f3460; color: #fff; border-color: #0f3460; }

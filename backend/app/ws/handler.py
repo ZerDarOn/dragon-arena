@@ -421,14 +421,33 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "set_cell_meta":
-                    # 设置黑暗/光照等元数据（DM 笔刷）
+                    # 设置黑暗/光照等元数据（DM 笔刷）— deprecated，请用 paint_cells
                     x, y = int(p.get("x", 0)), int(p.get("y", 0))
                     async with gs.lock:
                         if "is_dark" in p:
                             gs.map_svc.set_dark(x, y, bool(p["is_dark"]))
+                        if "darkness_strength" in p:
+                            gs.map_svc.set_darkness_strength(x, y, float(p["darkness_strength"]))
                         if "light_radius" in p:
                             gs.map_svc.set_light(x, y, int(p["light_radius"]))
                         _log_event(gs, player_id, "set_cell_meta", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                    await _broadcast_state(gs, room_id)
+                elif t == "paint_cells":
+                    # 统一地形+元数据绘制（替代 set_terrain + set_cell_meta）
+                    async with gs.lock:
+                        for cell in p.get("cells", []):
+                            cx, cy = int(cell["x"]), int(cell["y"])
+                            if "terrain" in cell:
+                                gs.map_svc.set_terrain(cx, cy, cell["terrain"])
+                            if "is_dark" in cell:
+                                gs.map_svc.set_dark(cx, cy, bool(cell["is_dark"]))
+                            if "darkness_strength" in cell:
+                                gs.map_svc.set_darkness_strength(cx, cy, float(cell["darkness_strength"]))
+                            if "light_radius" in cell:
+                                gs.map_svc.set_light(cx, cy, int(cell["light_radius"]))
+                        _log_event(gs, player_id, "paint_cells", params={"count": len(p.get("cells", []))})
                         if gs.snapshot_storage:
                             gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
@@ -898,6 +917,7 @@ async def _send_state_to_player(gs: RoomGameState, room_id: str, player_id: str)
                     cell["is_smoke"] = False
                     cell["smoke_ttl"] = None
                     cell["is_dark"] = False
+                    cell["darkness_strength"] = 0.0
                     cell["light_radius"] = 0
                     cell["height"] = 0
 

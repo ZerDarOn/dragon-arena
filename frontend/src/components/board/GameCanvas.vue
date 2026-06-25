@@ -60,6 +60,8 @@ const props = defineProps<{
   room: Room
   selfTokenId?: string
   visibleCells?: Set<string>
+  exploredCells?: Set<string>
+  fogOfWarEnabled?: boolean
   detectedTokens?: Record<string, string>  // {tokenId: 方位名}
   terrainBrush?: string
   lightRadius?: number
@@ -302,6 +304,10 @@ const TERRAIN_COLORS: Record<string, string> = {
   high: '#da6', smoke: '#ccc',
 }
 
+/**
+ * draw() — 四层渲染管道
+ *   L1 底图 → L2 地形 → L3 暗/光 → L4 战争迷雾 → Token → UI
+ */
 function draw() {
   const cv = canvasRef.value; if (!cv) return
   const ctx = cv.getContext('2d')!
@@ -313,212 +319,291 @@ function draw() {
   cv.style.width = `${cssW}px`; cv.style.height = `${cssH}px`
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, cssW, cssH)
-  // 底图（按 roomId 缓存 Image 对象）
-  if (props.bgImage) {
-    const img = getBgImg(props.bgImage)
-    if (img) {
-      ctx.globalAlpha = props.bgOpacity ?? 0.5
-      ctx.drawImage(img, 0, 0, cv.width, cv.height)
-      ctx.globalAlpha = 1
-    }
-  }
+
+  drawLayer1_Background(ctx, cv)
+  drawLayer2_Terrain(ctx)
+  drawLayer3_DarknessAndLight(ctx)
+  drawLayer4_FogOfWar(ctx)
+  drawTerrainPaintPreview(ctx)
+  drawTerrainHover(ctx)
+  drawAoeMarkers(ctx)
+  drawStrokes_(ctx)
+  drawTokens(ctx)
+  drawPoisonCircle(ctx)
+  drawDetectedMarkers(ctx)
+  drawDragPath(ctx)
+}
+
+/* ================================================================
+   Layer 1 — 底图
+   ================================================================ */
+function drawLayer1_Background(ctx: CanvasRenderingContext2D, cv: HTMLCanvasElement) {
+  if (!props.bgImage) return
+  const img = getBgImg(props.bgImage)
+  if (!img) return
+  ctx.globalAlpha = props.bgOpacity ?? 0.5
+  ctx.drawImage(img, 0, 0, cv.width, cv.height)
+  ctx.globalAlpha = 1
+}
+
+/* ================================================================
+   Layer 2 — 地形瓦片
+   ================================================================ */
+function drawLayer2_Terrain(ctx: CanvasRenderingContext2D) {
+  const cfg = props.room.config
   const map = props.room.game_map
-  // 地形
   for (let y = 0; y < cfg.map_height; y++) {
     for (let x = 0; x < cfg.map_width; x++) {
       const vis = !props.visibleCells || props.visibleCells.has(key(x, y))
-      if (!vis) { ctx.fillStyle = '#222'; ctx.fillRect(x*CELL, y*CELL, CELL, CELL); continue }
+      if (!vis) { ctx.fillStyle = '#222'; ctx.fillRect(x * CELL, y * CELL, CELL, CELL); continue }
       let bg = '#f0f0f0'
-      if (map && map.terrain[y] && map.terrain[y][x]) {
+      if (map?.terrain[y]?.[x]) {
         const cell = map.terrain[y][x]
         bg = TERRAIN_COLORS[cell.type] || '#f0f0f0'
         if (cell.is_smoke) bg = '#bbb'
-        // 黑暗格：暗化（除非管理员）
-        if (cell.is_dark && !props.isAdmin) bg = mixColor(bg, '#000', 0.55)
-        // 光源：加亮黄
-        if (cell.light_radius > 0) bg = mixColor(bg, '#ff8', 0.5)
+        // 光源暖黄（不与暗 mix，暗由 Layer 3 单独处理）
+        if (cell.light_radius > 0) bg = mixColor(bg, '#ff8', 0.35)
+        if (cell.height) {
+          ctx.fillStyle = bg; ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+          ctx.fillStyle = '#603'; ctx.font = '10px monospace'
+          ctx.fillText(String(cell.height), x * CELL + 2, y * CELL + 10)
+          continue
+        }
       }
-      ctx.fillStyle = bg; ctx.fillRect(x*CELL, y*CELL, CELL, CELL)
+      ctx.fillStyle = bg; ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
       ctx.strokeStyle = '#999'; ctx.lineWidth = 1
-      ctx.strokeRect(x*CELL, y*CELL, CELL, CELL)
-      if (map?.terrain[y]?.[x]?.height) {
-        ctx.fillStyle = '#603'; ctx.font = '10px monospace'
-        ctx.fillText(String(map.terrain[y][x].height), x*CELL+2, y*CELL+10)
-      }
+      ctx.strokeRect(x * CELL, y * CELL, CELL, CELL)
     }
   }
-  // 地形笔刷预览（拖拽时显示将要绘制的区域）
-  if (props.terrainBrush && terrainPaintPreview.value.length > 0) {
-    const brush = props.terrainBrush
-    const previewColor = brush === 'wall' ? 'rgba(68,68,68,0.5)' :
-                         brush === 'grass' ? 'rgba(153,204,153,0.5)' :
-                         brush === 'water' ? 'rgba(119,204,255,0.5)' :
-                         brush === 'high' ? 'rgba(221,170,102,0.5)' :
-                         brush === 'flat' ? 'rgba(240,240,240,0.5)' :
-                         'rgba(250,160,0,0.4)'
-    ctx.fillStyle = previewColor
-    for (const [px, py] of terrainPaintPreview.value) {
-      ctx.fillRect(px * CELL, py * CELL, CELL, CELL)
-    }
-    ctx.strokeStyle = '#fa0'; ctx.lineWidth = 2
-    for (const [px, py] of terrainPaintPreview.value) {
-      ctx.strokeRect(px * CELL + 1, py * CELL + 1, CELL - 2, CELL - 2)
-    }
-  }
-  // 悬停高亮（在标记工具或笔刷下）
-  const showHover = props.terrainBrush ||
-    ['measure', 'cone', 'line', 'sphere'].includes(tool.value)
-  if (hoveredCell.value && showHover) {
-    const [hx, hy] = hoveredCell.value
-    ctx.strokeStyle = '#fa0'; ctx.lineWidth = 2
-    ctx.strokeRect(hx*CELL, hy*CELL, CELL, CELL)
-  }
-  // 测距/AOE 模板：绘制已保留的 + 当前正在拖的
-  const allMarkers = [...aoeMarkers.value]
-  if (currentAoe.value) allMarkers.push(currentAoe.value)
-  for (const m of allMarkers) drawAoe(ctx, m)
+}
 
-  // 手绘注释
-  for (const s of drawStrokes.value) drawStroke(ctx, s)
-  if (currentStroke.value) drawStroke(ctx, currentStroke.value)
-  // 棋子
+/* ================================================================
+   Layer 3 — 环境暗 + 光源（全局合成模式挖洞）
+   ================================================================ */
+function drawLayer3_DarknessAndLight(ctx: CanvasRenderingContext2D) {
+  const cfg = props.room.config
+  const map = props.room.game_map
+  if (!map) return
+
+  // Pass 1: 画暗层
+  for (let y = 0; y < cfg.map_height; y++) {
+    for (let x = 0; x < cfg.map_width; x++) {
+      const cell = map.terrain[y]?.[x]
+      if (!cell?.is_dark) continue
+      if (props.isAdmin) continue
+      const strength = cell.darkness_strength ?? 0.7
+      ctx.fillStyle = `rgba(0, 0, 0, ${strength * 0.75})`
+      ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+    }
+  }
+
+  // Pass 2: 光源挖洞（在暗层上擦出亮区）
+  ctx.globalCompositeOperation = 'destination-out'
+  for (let y = 0; y < cfg.map_height; y++) {
+    for (let x = 0; x < cfg.map_width; x++) {
+      const cell = map.terrain[y]?.[x]
+      if (!cell || cell.light_radius <= 0) continue
+      const radius = cell.light_radius * CELL
+      const cx = x * CELL + CELL / 2
+      const cy = y * CELL + CELL / 2
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius)
+      grad.addColorStop(0, 'rgba(0,0,0,1)')
+      grad.addColorStop(0.6, 'rgba(0,0,0,0.5)')
+      grad.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.fillStyle = grad
+      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2)
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over'
+}
+
+/* ================================================================
+   Layer 4 — 战争迷雾（黑幕 + 记忆灰层）
+   ================================================================ */
+function drawLayer4_FogOfWar(ctx: CanvasRenderingContext2D) {
+  if (props.isAdmin) return
+  if (!props.fogOfWarEnabled) return
+  const cfg = props.room.config
+  for (let y = 0; y < cfg.map_height; y++) {
+    for (let x = 0; x < cfg.map_width; x++) {
+      const k = key(x, y)
+      if (!props.visibleCells || props.visibleCells.has(k)) continue
+      ctx.fillStyle = (props.exploredCells?.has(k) ?? false)
+        ? 'rgba(40, 40, 40, 0.55)'
+        : '#111'
+      ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+    }
+  }
+}
+
+/* ================================================================
+   Token 层 — 在所有视觉遮罩之上
+   ================================================================ */
+function drawTokens(ctx: CanvasRenderingContext2D) {
   for (const t of Object.values(props.room.tokens)) {
     if (!t.position) continue
     const tkSize = t.size || 1
-    if (!props.visibleCells || props.visibleCells.has(key(t.position.x, t.position.y))) {
-      const cx = t.position.x * CELL + (CELL * tkSize) / 2
-      const cy = t.position.y * CELL + (CELL * tkSize) / 2
-      const isSelf = t.owner_id === props.selfTokenId
-      const isDead = t.is_dead
-      const isSelected = t.id === selectedTokenId.value
-      // 选中边框：覆盖整个 token 占格区域
-      if (isSelected) {
-        ctx.strokeStyle = '#0f0'; ctx.lineWidth = 3
-        ctx.strokeRect(t.position.x*CELL - 1, t.position.y*CELL - 1, CELL*tkSize + 2, CELL*tkSize + 2)
-      }
-      // 头像优先：圆形头像，半径为 token 占格的 0.4 倍
-      const avatarImg = t.avatar_url ? avatarCache.value[t.avatar_url] : null
-      const r = (CELL / 2.5) * tkSize
-      if (avatarImg && avatarImg.complete) {
-        ctx.save()
-        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip()
-        ctx.drawImage(avatarImg, cx - r, cy - r, r * 2, r * 2)
-        ctx.restore()
-        ctx.strokeStyle = isDead ? '#888' : (isSelf ? '#fa0' : (t.type === 'monster' ? '#c33' : '#3a7'))
-        ctx.lineWidth = 2
-        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
-      } else {
-        ctx.fillStyle = isDead ? '#888' : (isSelf ? '#fa0' : (t.type === 'monster' ? '#c33' : '#3a7'))
-        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill()
-      }
-      // 攻击模式：敌方 token 高亮红圈
-      if (props.combatMode === 'attack' && !isSelf && !isDead && t.owner_id !== props.selfTokenId) {
-        ctx.strokeStyle = '#f00'; ctx.lineWidth = 3; ctx.setLineDash([4, 2])
-        ctx.beginPath(); ctx.arc(cx, cy, (CELL * tkSize) / 2 + 2, 0, Math.PI * 2); ctx.stroke()
-        ctx.setLineDash([])
-      }
-      const dirs = [[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]]
-      const [fdx, fdy] = dirs[t.facing] || [0, -1]
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2
-      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + fdx * (CELL * tkSize) / 2, cy + fdy * (CELL * tkSize) / 2); ctx.stroke()
-      if (!isDead) {
-        const barW = CELL * tkSize - 4
-        ctx.fillStyle = '#600'; ctx.fillRect(t.position.x*CELL+2, t.position.y*CELL + CELL*tkSize - 5, barW, 3)
-        const hpRatio = Math.max(0, t.hp / Math.max(1, t.max_hp))
-        ctx.fillStyle = hpRatio > 0.5 ? '#3a7' : (hpRatio > 0.25 ? '#fa0' : '#c33')
-        ctx.fillRect(t.position.x*CELL+2, t.position.y*CELL + CELL*tkSize - 5, barW * hpRatio, 3)
-      }
-      // Phase 2: 状态图标（token 右上角小圆点 + TTL）
-      if (!isDead && t.states && t.states.length > 0) {
-        const badgeR = 5
-        const startX = t.position.x * CELL + CELL * tkSize - badgeR - 2
-        const startY = t.position.y * CELL + badgeR + 2
-        const maxBadges = Math.min(t.states.length, 4) // 最多画 4 个，避免溢出
-        for (let si = 0; si < maxBadges; si++) {
-          const s = t.states[si]
-          const bx = startX - si * (badgeR * 2 + 1)
-          // 状态名 -> 颜色 + 首字
-          const colorMap: Record<string, string> = {
-            '点燃': '#e80', '中毒': '#a0f', '流血': '#c00',
-            '撕裂': '#d40', '隐身': '#0aa', '护甲降低': '#666',
-            '定身': '#48f', '沉默': '#f48', '毒圈': '#840',
-          }
-          const color = colorMap[s.name] || '#888'
-          const label = s.name.charAt(0)
-          ctx.fillStyle = color
-          ctx.beginPath(); ctx.arc(bx, startY, badgeR, 0, Math.PI * 2); ctx.fill()
-          ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1; ctx.stroke()
-          ctx.fillStyle = '#fff'
-          ctx.font = `bold ${badgeR + 3}px sans-serif`
-          ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-          ctx.fillText(label, bx, startY + 0.5)
-          // TTL 小字（badge 下方）
-          if (s.ttl > 0) {
-            ctx.fillStyle = 'rgba(255,255,255,0.9)'
-            ctx.font = 'bold 7px sans-serif'
-            ctx.textAlign = 'center'
-            ctx.fillText(String(s.ttl), bx, startY + badgeR + 6)
-          }
+    const isSelf = t.owner_id === props.selfTokenId
+    const isDead = t.is_dead
+    const isVisible = !props.visibleCells || props.visibleCells.has(key(t.position.x, t.position.y))
+    if (!isSelf && !isVisible) continue
+
+    const cx = t.position.x * CELL + (CELL * tkSize) / 2
+    const cy = t.position.y * CELL + (CELL * tkSize) / 2
+    const isSelected = t.id === selectedTokenId.value
+
+    if (isSelected) {
+      ctx.strokeStyle = '#0f0'; ctx.lineWidth = 3
+      ctx.strokeRect(t.position.x * CELL - 1, t.position.y * CELL - 1, CELL * tkSize + 2, CELL * tkSize + 2)
+    }
+
+    const avatarImg = t.avatar_url ? avatarCache.value[t.avatar_url] : null
+    const r = (CELL / 2.5) * tkSize
+    if (avatarImg && avatarImg.complete) {
+      ctx.save()
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip()
+      ctx.drawImage(avatarImg, cx - r, cy - r, r * 2, r * 2)
+      ctx.restore()
+      ctx.strokeStyle = isDead ? '#888' : (isSelf ? '#fa0' : (t.type === 'monster' ? '#c33' : '#3a7'))
+      ctx.lineWidth = 2
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
+    } else {
+      ctx.fillStyle = isDead ? '#888' : (isSelf ? '#fa0' : (t.type === 'monster' ? '#c33' : '#3a7'))
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill()
+    }
+
+    if (props.combatMode === 'attack' && !isSelf && !isDead && t.owner_id !== props.selfTokenId) {
+      ctx.strokeStyle = '#f00'; ctx.lineWidth = 3; ctx.setLineDash([4, 2])
+      ctx.beginPath(); ctx.arc(cx, cy, (CELL * tkSize) / 2 + 2, 0, Math.PI * 2); ctx.stroke()
+      ctx.setLineDash([])
+    }
+
+    const dirs = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]]
+    const [fdx, fdy] = dirs[t.facing] || [0, -1]
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + fdx * (CELL * tkSize) / 2, cy + fdy * (CELL * tkSize) / 2); ctx.stroke()
+
+    if (!isDead) {
+      const barW = CELL * tkSize - 4
+      ctx.fillStyle = '#600'; ctx.fillRect(t.position.x * CELL + 2, t.position.y * CELL + CELL * tkSize - 5, barW, 3)
+      const hpRatio = Math.max(0, t.hp / Math.max(1, t.max_hp))
+      ctx.fillStyle = hpRatio > 0.5 ? '#3a7' : (hpRatio > 0.25 ? '#fa0' : '#c33')
+      ctx.fillRect(t.position.x * CELL + 2, t.position.y * CELL + CELL * tkSize - 5, barW * hpRatio, 3)
+    }
+
+    if (!isDead && t.states && t.states.length > 0) {
+      const badgeR = 5
+      const startX = t.position.x * CELL + CELL * tkSize - badgeR - 2
+      const startY = t.position.y * CELL + badgeR + 2
+      const maxBadges = Math.min(t.states.length, 4)
+      for (let si = 0; si < maxBadges; si++) {
+        const s = t.states[si]
+        const bx = startX - si * (badgeR * 2 + 1)
+        const colorMap: Record<string, string> = {
+          '点燃': '#e80', '中毒': '#a0f', '流血': '#c00',
+          '撕裂': '#d40', '隐身': '#0aa', '护甲降低': '#666',
+          '定身': '#48f', '沉默': '#f48', '毒圈': '#840',
+        }
+        const color = colorMap[s.name] || '#888'
+        ctx.fillStyle = color
+        ctx.beginPath(); ctx.arc(bx, startY, badgeR, 0, Math.PI * 2); ctx.fill()
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1; ctx.stroke()
+        ctx.fillStyle = '#fff'
+        ctx.font = `bold ${badgeR + 3}px sans-serif`
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+        ctx.fillText(s.name.charAt(0), bx, startY + 0.5)
+        if (s.ttl > 0) {
+          ctx.fillStyle = 'rgba(255,255,255,0.9)'
+          ctx.font = 'bold 7px sans-serif'
+          ctx.textAlign = 'center'
+          ctx.fillText(String(s.ttl), bx, startY + badgeR + 6)
         }
       }
     }
   }
-  // 毒圈边界
-  const poisonCfg = props.room.config
-  if (poisonCfg && poisonCfg.poison_circle_enabled) {
-    const cx = (poisonCfg.poison_circle_center_x ?? poisonCfg.map_width / 2) * CELL + CELL / 2
-    const cy = (poisonCfg.poison_circle_center_y ?? poisonCfg.map_height / 2) * CELL + CELL / 2
-    const r = (poisonCfg.poison_circle_radius ?? 15) * CELL
-    ctx.strokeStyle = 'rgba(200, 50, 50, 0.8)'
-    ctx.lineWidth = 3
-    ctx.setLineDash([8, 4])
-    ctx.beginPath()
-    ctx.arc(cx, cy, r, 0, Math.PI * 2)
-    ctx.stroke()
-    ctx.setLineDash([])
-    // 毒圈外暗化
-    ctx.fillStyle = 'rgba(100, 0, 0, 0.15)'
-    ctx.fillRect(0, 0, cv.width, cv.height)
-    // 再用圆形挖去安全区
-    ctx.globalCompositeOperation = 'destination-out'
-    ctx.beginPath()
-    ctx.arc(cx, cy, r, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.globalCompositeOperation = 'source-over'
+}
+
+function drawTerrainPaintPreview(ctx: CanvasRenderingContext2D) {
+  if (!props.terrainBrush || terrainPaintPreview.value.length === 0) return
+  const brush = props.terrainBrush
+  const colorMap: Record<string, string> = {
+    wall: 'rgba(68,68,68,0.5)', grass: 'rgba(153,204,153,0.5)',
+    water: 'rgba(119,204,255,0.5)', high: 'rgba(221,170,102,0.5)',
+    flat: 'rgba(240,240,240,0.5)',
   }
-  if (props.detectedTokens) {
-    const selfTok = Object.values(props.room.tokens).find((t) => t.id === props.selfTokenId)
-    if (selfTok?.position) {
-      const cx = selfTok.position.x * CELL + CELL / 2
-      const cy = selfTok.position.y * CELL + CELL / 2
-      const dirVec: Record<string, [number, number]> = {
-        '北': [0, -1], '东北': [1, -1], '东': [1, 0], '东南': [1, 1],
-        '南': [0, 1], '西南': [-1, 1], '西': [-1, 0], '西北': [-1, -1],
-      }
-      for (const [_tid, dir] of Object.entries(props.detectedTokens)) {
-        const v = dirVec[dir]
-        if (!v) continue
-        // 在自己外圈画一个 ? 标记 + 方位箭头
-        const ax = cx + v[0] * CELL * 1.2
-        const ay = cy + v[1] * CELL * 1.2
-        ctx.fillStyle = 'rgba(200,200,255,0.7)'
-        ctx.beginPath(); ctx.arc(ax, ay, CELL / 3, 0, Math.PI * 2); ctx.fill()
-        ctx.strokeStyle = '#aaf'; ctx.lineWidth = 1; ctx.stroke()
-        ctx.fillStyle = '#335'; ctx.font = '12px sans-serif'
-        ctx.fillText('?', ax - 3, ay + 4)
-        ctx.fillStyle = '#aaf'; ctx.font = '9px sans-serif'
-        ctx.fillText(dir, ax - 8, ay - CELL / 3)
-      }
-    }
+  ctx.fillStyle = colorMap[brush] || 'rgba(250,160,0,0.4)'
+  for (const [px, py] of terrainPaintPreview.value) ctx.fillRect(px * CELL, py * CELL, CELL, CELL)
+  ctx.strokeStyle = '#fa0'; ctx.lineWidth = 2
+  for (const [px, py] of terrainPaintPreview.value) ctx.strokeRect(px * CELL + 1, py * CELL + 1, CELL - 2, CELL - 2)
+}
+
+function drawTerrainHover(ctx: CanvasRenderingContext2D) {
+  const showHover = props.terrainBrush || ['measure', 'cone', 'line', 'sphere'].includes(tool.value)
+  if (!hoveredCell.value || !showHover) return
+  const [hx, hy] = hoveredCell.value
+  ctx.strokeStyle = '#fa0'; ctx.lineWidth = 2
+  ctx.strokeRect(hx * CELL, hy * CELL, CELL, CELL)
+}
+
+function drawAoeMarkers(ctx: CanvasRenderingContext2D) {
+  const all = [...aoeMarkers.value]
+  if (currentAoe.value) all.push(currentAoe.value)
+  for (const m of all) drawAoe(ctx, m)
+}
+
+function drawStrokes_(ctx: CanvasRenderingContext2D) {
+  for (const s of drawStrokes.value) drawStroke(ctx, s)
+  if (currentStroke.value) drawStroke(ctx, currentStroke.value)
+}
+
+function drawPoisonCircle(ctx: CanvasRenderingContext2D) {
+  const cfg = props.room.config
+  const poisonCfg = props.room.game_map as any
+  if (!poisonCfg || !poisonCfg.poison_circle_enabled) return
+  const cx = (poisonCfg.poison_circle_center_x ?? cfg.map_width / 2) * CELL + CELL / 2
+  const cy = (poisonCfg.poison_circle_center_y ?? cfg.map_height / 2) * CELL + CELL / 2
+  const r = (poisonCfg.poison_circle_radius ?? 15) * CELL
+  ctx.strokeStyle = 'rgba(200, 50, 50, 0.8)'
+  ctx.lineWidth = 3
+  ctx.setLineDash([8, 4])
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.setLineDash([])
+}
+
+function drawDetectedMarkers(ctx: CanvasRenderingContext2D) {
+  if (!props.detectedTokens) return
+  const selfTok = Object.values(props.room.tokens).find((t) => t.id === props.selfTokenId)
+  if (!selfTok?.position) return
+  const cx = selfTok.position.x * CELL + CELL / 2
+  const cy = selfTok.position.y * CELL + CELL / 2
+  const dirVec: Record<string, [number, number]> = {
+    '北': [0, -1], '东北': [1, -1], '东': [1, 0], '东南': [1, 1],
+    '南': [0, 1], '西南': [-1, 1], '西': [-1, 0], '西北': [-1, -1],
   }
-  // 拖动路径
-  if (dragPath.value.length > 0) {
-    ctx.strokeStyle = '#fa0'; ctx.lineWidth = 3; ctx.setLineDash([4, 2]); ctx.beginPath()
-    const self = Object.values(props.room.tokens).find((t) => t.id === props.selfTokenId)
-    if (self?.position) ctx.moveTo(self.position.x * CELL + CELL / 2, self.position.y * CELL + CELL / 2)
-    for (const [x, y] of dragPath.value) ctx.lineTo(x * CELL + CELL / 2, y * CELL + CELL / 2)
-    ctx.stroke(); ctx.setLineDash([])
+  for (const [_tid, dir] of Object.entries(props.detectedTokens)) {
+    const v = dirVec[dir]
+    if (!v) continue
+    const ax = cx + v[0] * CELL * 1.2
+    const ay = cy + v[1] * CELL * 1.2
+    ctx.fillStyle = 'rgba(200,200,255,0.7)'
+    ctx.beginPath(); ctx.arc(ax, ay, CELL / 3, 0, Math.PI * 2); ctx.fill()
+    ctx.strokeStyle = '#aaf'; ctx.lineWidth = 1; ctx.stroke()
+    ctx.fillStyle = '#335'; ctx.font = '12px sans-serif'
+    ctx.fillText('?', ax - 3, ay + 4)
+    ctx.fillStyle = '#aaf'; ctx.font = '9px sans-serif'
+    ctx.fillText(dir, ax - 8, ay - CELL / 3)
   }
+}
+
+function drawDragPath(ctx: CanvasRenderingContext2D) {
+  if (dragPath.value.length === 0) return
+  ctx.strokeStyle = '#fa0'; ctx.lineWidth = 3; ctx.setLineDash([4, 2]); ctx.beginPath()
+  const self = Object.values(props.room.tokens).find((t) => t.id === props.selfTokenId)
+  if (self?.position) ctx.moveTo(self.position.x * CELL + CELL / 2, self.position.y * CELL + CELL / 2)
+  for (const [x, y] of dragPath.value) ctx.lineTo(x * CELL + CELL / 2, y * CELL + CELL / 2)
+  ctx.stroke(); ctx.setLineDash([])
 }
 
 // --- AOE 模板绘制 ---
@@ -832,7 +917,7 @@ function paintCell(x: number, y: number) {
   const brush = props.terrainBrush
   // 特殊笔刷：黑暗/光源/清除元数据
   if (brush === 'dark') {
-    terrainPaintQueue.value.push({ x, y, type: 'meta', meta: { is_dark: true } })
+    terrainPaintQueue.value.push({ x, y, type: 'meta', meta: { is_dark: true, darkness_strength: 0.7 } })
     return
   }
   if (brush === 'light') {
@@ -840,7 +925,7 @@ function paintCell(x: number, y: number) {
     return
   }
   if (brush === 'clear_meta') {
-    terrainPaintQueue.value.push({ x, y, type: 'meta', meta: { is_dark: false, light_radius: 0 } })
+    terrainPaintQueue.value.push({ x, y, type: 'meta', meta: { is_dark: false, darkness_strength: 0.0, light_radius: 0 } })
     return
   }
   // 普通地形
@@ -851,21 +936,16 @@ function paintCell(x: number, y: number) {
 
 function flushTerrainPaint() {
   if (terrainPaintQueue.value.length === 0) return
-  // 按类型分组批量发送
-  const metaCells = terrainPaintQueue.value.filter(p => p.type === 'meta')
-  const terrainCells = terrainPaintQueue.value.filter(p => p.type !== 'meta')
-  // 发送普通地形（逐个，因为后端 set_terrain 只支持单格）
-  for (const p of terrainCells) {
-    window.dispatchEvent(new CustomEvent('ws-send', {
-      detail: { type: 'set_terrain', payload: { x: p.x, y: p.y, type: p.type } }
-    }))
-  }
-  // 发送元数据（逐个）
-  for (const p of metaCells) {
-    window.dispatchEvent(new CustomEvent('ws-send', {
-      detail: { type: 'set_cell_meta', payload: { x: p.x, y: p.y, ...p.meta } }
-    }))
-  }
+  // 统一使用 paint_cells 协议（替代 set_terrain + set_cell_meta，deprecated 但保留后端支持）
+  const cells = terrainPaintQueue.value.map(p => {
+    const cell: any = { x: p.x, y: p.y }
+    if (p.type !== 'meta') { cell.terrain = p.type }
+    if (p.meta) Object.assign(cell, p.meta)
+    return cell
+  })
+  window.dispatchEvent(new CustomEvent('ws-send', {
+    detail: { type: 'paint_cells', payload: { cells } }
+  }))
   terrainPaintQueue.value = []
 }
 

@@ -65,7 +65,9 @@ class VisionService:
         # 第三步：黑暗过滤
         if token.darkvision:
             return candidates  # 黑暗视觉无视黑暗
-        return {c for c in candidates if not self._is_dark_cell(c)}
+        # 始终保留自身所在格：即使站在暗格里、没光没黑暗视觉，玩家也得看得见自己，
+        # 否则会在黑暗中从自己的视野里"消失"（self token 不渲染）。
+        return {c for c in candidates if c == origin or not self._is_dark_cell(c)}
 
     def compute_visible_tokens(self, token_id: str) -> List[str]:
         """完全可见的 token（在可见格子上）。"""

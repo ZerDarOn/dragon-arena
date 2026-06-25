@@ -6,18 +6,18 @@
     </template>
     <!-- 骰子结果 -->
     <template v-else-if="msg.content_type === 'dice'">
-      <span class="sender">{{ msg.sender_id }}</span>
+      <span class="sender">{{ senderName }}</span>
       <span class="dice">🎲 {{ msg.text }}</span>
     </template>
     <!-- 空间语音（衰减提示） -->
     <template v-else-if="msg.channel.startsWith('spatial')">
-      <span class="sender">{{ msg.sender_id }}</span>
+      <span class="sender">{{ senderName }}</span>
       <span class="text spatial" :style="spatialStyle" v-html="renderText(msg.text)"></span>
       <span v-if="msg.extra?.distance" class="meta">{{ formatDistance(msg.extra) }}</span>
     </template>
     <!-- 普通消息 -->
     <template v-else>
-      <span class="sender">{{ msg.sender_id }}</span>
+      <span class="sender">{{ senderName }}</span>
       <span class="text" v-html="renderText(msg.text)"></span>
     </template>
   </div>
@@ -25,7 +25,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ChatMessage } from '../../api/types'
+import { useRoomStore } from '../../stores/room'
 const props = defineProps<{ msg: ChatMessage }>()
+
+const room = useRoomStore()
+// sender_id 是 player_id（见后端 chat_service），从 room.players 解析为昵称展示。
+const senderName = computed(() => {
+  const p = room.room?.players?.[props.msg.sender_id]
+  return p?.nickname || p?.name || props.msg.sender_id
+})
 
 const spatialStyle = computed(() => {
   const att = props.msg.extra?.attenuation

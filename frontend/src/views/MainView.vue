@@ -110,6 +110,8 @@
                         :self-token-id="selfTokenId"
                         :is-admin="auth.isAdmin"
                         :visible-cells="visibleCells"
+                        :explored-cells="exploredCells"
+                        :fog-of-war-enabled="fogOfWarEnabled"
                         :detected-tokens="room.room.detected_tokens"
                         :terrain-brush="dmRef?.selected"
                         :light-radius="dmRef?.lightRadius"
@@ -272,6 +274,7 @@ import {
   listMyCharacters,
 } from '../api/rest'
 import { pushToast } from '../composables/useToast'
+import { useFogOfWar } from '../composables/useFogOfWar'
 import type { Room, CharacterSheet } from '../api/types'
 import ChatPanel from '../components/chat/ChatPanel.vue'
 import DMConsole from '../components/layout/DMConsole.vue'
@@ -547,6 +550,11 @@ async function doJoin() {
 
 const wsStatus = ref<ConnectionStatus>('closed')
 
+// --- 战争迷雾 ---
+const fow = useFogOfWar()
+const exploredCells = computed<Set<string>>(() => fow.exploredCells.value)
+const fogOfWarEnabled = computed(() => room.room?.config.fog_of_war_enabled ?? false)
+
 async function connectBattle(roomId: string) {
   // 先验证 token
   try { await fetchMe() } catch {
@@ -572,6 +580,8 @@ async function connectBattle(roomId: string) {
     }
   })
   ws.connect(roomId, auth.token!)
+  // 加载本局战争迷雾记忆
+  fow.load(roomId, auth.user?.id || '')
   loadBgForRoom(roomId)
 }
 
@@ -603,7 +613,17 @@ function triggerDamageFeedback() {
 
 function dispatchMessage(msg: ServerMessage) {
   const m = msg as any
-  if (m.type === 'state_sync') room.setState(m.payload)
+  if (m.type === 'state_sync') {
+    room.setState(m.payload)
+    // 记录探索记忆
+    if (m.payload.visible_cells && !auth.isAdmin) {
+      const newCells = new Set<string>(m.payload.visible_cells.map(([x, y]: [number, number]) => `${x},${y}`))
+      const changed = fow.markExplored(newCells)
+      if (changed) {
+        fow.persist(m.payload.id, auth.user?.id || '')
+      }
+    }
+  }
   else if (m.type === 'chat') chat.addMessage(m.payload)
   else if (m.type === 'combat_log') {
     combatRef.value?.addLog(m.payload)

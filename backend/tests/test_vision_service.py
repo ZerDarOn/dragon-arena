@@ -50,3 +50,16 @@ def test_token_behind_wall_invisible(setup):
     room.tokens["t2"] = Token(id="t2", position={"x": 5, "y": 1})
     visible_tokens = svc.compute_visible_tokens("t1")
     assert "t2" not in visible_tokens
+
+
+def test_self_cell_visible_even_when_dark(setup):
+    """站在暗格里、无光源无黑暗视觉，玩家仍应看得见自己所在格。
+    回归测试：曾经 compute_visible_cells 会把暗的 origin 也过滤掉，
+    导致 self token 在黑暗中从自己视野里消失。"""
+    svc, room = setup
+    from app.services.map_service import MapService
+    # 把玩家脚下那格设为环境暗
+    MapService(svc.map).set_dark(5, 5, True)
+    assert room.tokens["t1"].darkvision is False
+    vis = svc.compute_visible_cells("t1")
+    assert (5, 5) in vis, "暗格里玩家应该仍能看见自己脚下那格"

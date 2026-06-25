@@ -30,6 +30,7 @@ export interface TerrainCell {
   smoke_ttl: number | null
   is_smoke: boolean
   is_dark: boolean
+  darkness_strength: number
   light_radius: number
 }
 export interface GameMap {

@@ -21,7 +21,8 @@ export type ClientMessage =
   | { type: 'sprint'; payload: { token_id: string; path: [number, number][] } }
   | { type: 'use_item'; payload: { token_id: string; item_name: string } }
   | { type: 'set_terrain'; payload: { x: number; y: number; type: string } }
-  | { type: 'set_cell_meta'; payload: { x: number; y: number; is_dark?: boolean; light_radius?: number } }
+  | { type: 'set_cell_meta'; payload: { x: number; y: number; is_dark?: boolean; darkness_strength?: number; light_radius?: number } }
+  | { type: 'paint_cells'; payload: { cells: Array<{ x: number; y: number; terrain?: string; is_dark?: boolean; darkness_strength?: number; light_radius?: number }> } }
   | { type: 'fill_terrain'; payload: { x1: number; y1: number; x2: number; y2: number; type: string } }
   | { type: 'resize_map'; payload: { width: number; height: number } }
   | { type: 'end_turn'; payload: Record<string, never> }
