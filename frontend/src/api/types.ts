@@ -191,6 +191,23 @@ export interface Item {
   created_at: number; updated_at: number
 }
 
+// 抽取表（加权随机 / 从内容库分类抽）
+export interface RollEntry { weight: number; text: string; ref?: string }
+export interface RollTable {
+  id: string
+  name: string
+  description: string
+  source_category: '' | 'event' | 'trap' | 'monster' | 'adventure' | 'npc'
+  entries: RollEntry[]
+}
+export interface DrawResult {
+  table_id: string
+  table_name: string
+  text: string
+  ref?: string
+  entry?: LibraryEntry | null
+}
+
 // 内容库（事件/陷阱/怪物/奇遇/NPC）只读参考条目
 export interface LibraryEntry {
   id: string

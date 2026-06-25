@@ -18,6 +18,8 @@ from app.schemas.actor import ActorCreate, ActorUpdate
 from app.schemas.item import ItemCreate, ItemUpdate
 from app.schemas.library import LibraryEntry
 from app.services.library_service import library_service
+from app.schemas.rolltable import RollTable, RollEntry, DrawResult
+from app.services.rolltable_service import rolltable_service
 
 app = FastAPI(title="Dragon Arena")
 app.add_middleware(
@@ -318,6 +320,50 @@ async def import_library(req: LibraryImportRequest):
         return library_service.import_entries(req.entries, mode=req.mode or "upsert")
     except Exception as e:
         raise HTTPException(400, f"导入失败：{e}")
+
+
+# ---- 抽取表（RollTable）----
+
+class RollTableInput(BaseModel):
+    id: Optional[str] = None
+    name: str
+    description: str = ""
+    source_category: str = ""
+    entries: List[RollEntry] = []
+
+
+@app.get("/api/rolltables", response_model=List[RollTable], dependencies=[Depends(get_current_user)])
+async def list_rolltables():
+    return rolltable_service.list()
+
+
+@app.post("/api/rolltables", response_model=RollTable, dependencies=[Depends(require_admin)])
+async def create_rolltable(req: RollTableInput):
+    return rolltable_service.create(req.model_dump(exclude_none=True))
+
+
+@app.put("/api/rolltables/{tid}", response_model=RollTable, dependencies=[Depends(require_admin)])
+async def update_rolltable(tid: str, req: RollTableInput):
+    t = rolltable_service.update(tid, req.model_dump(exclude_none=True))
+    if not t:
+        raise HTTPException(404, "rolltable not found")
+    return t
+
+
+@app.delete("/api/rolltables/{tid}", dependencies=[Depends(require_admin)])
+async def delete_rolltable(tid: str):
+    if not rolltable_service.delete(tid):
+        raise HTTPException(404, "rolltable not found")
+    return {"ok": True}
+
+
+@app.post("/api/rolltables/{tid}/draw", response_model=DrawResult, dependencies=[Depends(get_current_user)])
+async def draw_rolltable(tid: str):
+    """抽一次（服务端权威）。所有登录用户可抽——团主用得最多。"""
+    r = rolltable_service.draw(tid)
+    if not r:
+        raise HTTPException(404, "rolltable not found")
+    return r
 
 
 # ---- 头像上传 ----

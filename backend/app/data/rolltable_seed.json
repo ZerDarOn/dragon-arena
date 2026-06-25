@@ -1,0 +1,28 @@
+[
+  {
+    "id": "rt_random_event",
+    "name": "随机事件",
+    "description": "每大回合结束 DM 可抽一个（来自内容库·事件）",
+    "source_category": "event",
+    "entries": []
+  },
+  {
+    "id": "rt_random_monster",
+    "name": "随机怪物",
+    "description": "刷怪用（来自内容库·怪物）",
+    "source_category": "monster",
+    "entries": []
+  },
+  {
+    "id": "rt_airdrop",
+    "name": "空投道具",
+    "description": "空投箱开出的内容（加权自定义）",
+    "source_category": "",
+    "entries": [
+      { "weight": 5, "text": "随机 D 级装备 ×1" },
+      { "weight": 3, "text": "随机 C 级道具 ×1" },
+      { "weight": 1, "text": "随机 B 级装备 ×1" },
+      { "weight": 2, "text": "金币 50G" }
+    ]
+  }
+]

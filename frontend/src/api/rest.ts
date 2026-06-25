@@ -1,5 +1,5 @@
 import { useAuthStore } from '../stores/auth'
-import type { LoginResponse, UserPublic, CharacterSheet, LibraryEntry } from './types'
+import type { LoginResponse, UserPublic, CharacterSheet, LibraryEntry, RollTable, DrawResult } from './types'
 
 // 跟 api/ws.ts 保持一致：跟着当前访问的 host 走，而不是硬编码 localhost。
 // 否则局域网内其他设备访问前端时，WS 能连上但所有 REST 请求都会打到它们自己的本机，永远连不上。
@@ -50,6 +50,32 @@ export async function importLibrary(entries: any[], mode: 'upsert' | 'replace' =
     const err = await r.json().catch(() => ({}))
     throw new Error(err.detail || '导入失败')
   }
+  return r.json()
+}
+
+// ---- 抽取表 ----
+export async function listRollTables(): Promise<RollTable[]> {
+  const r = await fetch(`${API}/api/rolltables`, { headers: authHeaders() })
+  if (!r.ok) throw new Error('加载抽取表失败')
+  return r.json()
+}
+export async function createRollTable(body: Partial<RollTable>): Promise<RollTable> {
+  const r = await fetch(`${API}/api/rolltables`, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) })
+  if (!r.ok) throw new Error('创建抽取表失败')
+  return r.json()
+}
+export async function updateRollTable(id: string, body: Partial<RollTable>): Promise<RollTable> {
+  const r = await fetch(`${API}/api/rolltables/${id}`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify(body) })
+  if (!r.ok) throw new Error('更新抽取表失败')
+  return r.json()
+}
+export async function deleteRollTable(id: string): Promise<void> {
+  const r = await fetch(`${API}/api/rolltables/${id}`, { method: 'DELETE', headers: authHeaders() })
+  if (!r.ok) throw new Error('删除抽取表失败')
+}
+export async function drawRollTable(id: string): Promise<DrawResult> {
+  const r = await fetch(`${API}/api/rolltables/${id}/draw`, { method: 'POST', headers: authHeaders() })
+  if (!r.ok) throw new Error('抽取失败')
   return r.json()
 }
 

@@ -278,6 +278,69 @@
       </ul>
     </div>
 
+    <!-- 抽取表（所有人可抽，增删改仅管理员）-->
+    <div v-if="active === 'rolltable'" class="panel">
+      <div class="add-form">
+        <button v-if="canManageLibrary" class="add-btn" @click="newTable">+ 新建抽取表</button>
+      </div>
+      <div v-if="lastDraw" class="draw-result">
+        🎲 <b>{{ lastDraw.table_name }}</b> →
+        <span class="draw-text">{{ lastDraw.text }}</span>
+        <span v-if="lastDraw.entry && lastDraw.entry.tier" class="badge">{{ lastDraw.entry.tier }}</span>
+        <div v-if="lastDraw.entry && lastDraw.entry.effect_text" class="draw-eff">{{ lastDraw.entry.effect_text }}</div>
+      </div>
+      <ul class="actor-list">
+        <li v-for="t in rollTables" :key="t.id" class="actor-card">
+          <div class="actor-info">
+            <div class="actor-name">{{ t.name }}</div>
+            <div class="actor-meta">
+              {{ t.description }}
+              <span class="badge">{{ t.source_category ? '内容库·' + rtCatLabel(t.source_category) : t.entries.length + ' 条目' }}</span>
+            </div>
+          </div>
+          <div class="actor-actions">
+            <button class="mini-btn draw-btn" @click="doDraw(t)">🎲 抽取</button>
+            <button v-if="canManageLibrary" class="mini-btn" @click="editTable(t)">编辑</button>
+            <button v-if="canManageLibrary" class="mini-btn danger" @click="removeTable(t)">删</button>
+          </div>
+        </li>
+        <li v-if="!rollTables.length" class="empty">暂无抽取表<br/><small v-if="canManageLibrary">新建一张：可从内容库分类随机抽，或自定义加权条目</small></li>
+      </ul>
+
+      <div v-if="showTableForm" class="modal-overlay" @click.self="showTableForm = false">
+        <div class="modal-box">
+          <h3>{{ editingTable ? '编辑抽取表' : '新建抽取表' }}</h3>
+          <div class="form-grid">
+            <label style="grid-column:1/-1">名称 <input v-model="tableForm.name" /></label>
+            <label style="grid-column:1/-1">说明 <input v-model="tableForm.description" /></label>
+            <label style="grid-column:1/-1">抽取来源
+              <select v-model="tableForm.source_category">
+                <option value="">自定义加权条目</option>
+                <option value="event">内容库·事件</option>
+                <option value="trap">内容库·陷阱</option>
+                <option value="monster">内容库·怪物</option>
+                <option value="adventure">内容库·奇遇</option>
+                <option value="npc">内容库·NPC</option>
+              </select>
+            </label>
+          </div>
+          <div v-if="!tableForm.source_category" class="rt-entries">
+            <p class="hint">加权条目（weight 越大越容易抽到）</p>
+            <div v-for="(en, i) in tableForm.entries" :key="i" class="rt-entry-row">
+              <input type="number" v-model.number="en.weight" min="1" class="rt-weight" />
+              <input v-model="en.text" placeholder="结果文字" class="rt-text" />
+              <button class="del" @click="tableForm.entries.splice(i, 1)">×</button>
+            </div>
+            <button class="mini-btn" @click="tableForm.entries.push({ weight: 1, text: '' })">+ 加一条</button>
+          </div>
+          <div class="form-actions">
+            <button class="save-btn" @click="saveTable">保存</button>
+            <button class="cancel-btn" @click="showTableForm = false">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 光源/物件模板 -->
     <div v-if="active === 'objects'" class="panel">
       <div class="add-form" v-if="canManageLibrary">
@@ -305,8 +368,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { listAllCharacters, listMyCharacters, listLibrary, importLibrary, uploadAvatar } from '../../api/rest'
-import type { CharacterSheet, Actor, ActorCreate, Item, ItemCreate, LibraryEntry } from '../../api/types'
+import { listAllCharacters, listMyCharacters, listLibrary, importLibrary, uploadAvatar,
+  listRollTables, createRollTable, updateRollTable, deleteRollTable, drawRollTable } from '../../api/rest'
+import type { CharacterSheet, Actor, ActorCreate, Item, ItemCreate, LibraryEntry, RollTable, DrawResult } from '../../api/types'
 import { pushToast } from '../../composables/useToast'
 import { monsters, equips, objects } from '../../stores/resources'
 import { useActorStore } from '../../stores/actors'
@@ -329,6 +393,7 @@ const allTabs = [
   { key: 'actors', label: '角色模板' },
   { key: 'items', label: '道具库' },
   { key: 'library', label: '内容库' },
+  { key: 'rolltable', label: '抽取表' },
   { key: 'monsters', label: '怪物模板' },
   { key: 'equip', label: '装备池' },
   { key: 'objects', label: '物件' },
@@ -598,12 +663,56 @@ async function onImportLibrary(e: Event) {
   }
 }
 
+// ---- 抽取表（所有人可抽；增删改仅管理员）----
+const rollTables = ref<RollTable[]>([])
+const lastDraw = ref<DrawResult | null>(null)
+async function loadRollTables() {
+  try { rollTables.value = await listRollTables() } catch (e) { console.warn(e) }
+}
+async function doDraw(t: RollTable) {
+  try {
+    lastDraw.value = await drawRollTable(t.id)
+    pushToast(`🎲 ${lastDraw.value.table_name}：${lastDraw.value.text}`, 'info')
+  } catch { pushToast('抽取失败', 'error') }
+}
+function rtCatLabel(c: string) {
+  return ({ event: '事件', trap: '陷阱', monster: '怪物', adventure: '奇遇', npc: 'NPC' } as Record<string, string>)[c] || c
+}
+const showTableForm = ref(false)
+const editingTable = ref<RollTable | null>(null)
+const emptyTableForm = () => ({ name: '', description: '', source_category: '' as RollTable['source_category'], entries: [{ weight: 1, text: '' }] })
+const tableForm = ref(emptyTableForm())
+function newTable() { editingTable.value = null; tableForm.value = emptyTableForm(); showTableForm.value = true }
+function editTable(t: RollTable) {
+  editingTable.value = t
+  tableForm.value = { name: t.name, description: t.description, source_category: t.source_category,
+    entries: t.entries.length ? t.entries.map((e) => ({ weight: e.weight, text: e.text })) : [{ weight: 1, text: '' }] }
+  showTableForm.value = true
+}
+async function saveTable() {
+  if (!tableForm.value.name.trim()) return
+  const f = tableForm.value
+  const body = { name: f.name, description: f.description, source_category: f.source_category,
+    entries: f.source_category ? [] : f.entries.filter((e) => e.text.trim()) }
+  try {
+    if (editingTable.value) await updateRollTable(editingTable.value.id, body)
+    else await createRollTable(body)
+    showTableForm.value = false
+    await loadRollTables()
+  } catch (e) { pushToast('保存失败：' + (e as Error).message, 'error') }
+}
+async function removeTable(t: RollTable) {
+  if (!confirm(`删除抽取表「${t.name}」？`)) return
+  try { await deleteRollTable(t.id); await loadRollTables() } catch { pushToast('删除失败', 'error') }
+}
+
 // 角色卡保存/新建/删除后（CharacterSheetEditor 派发）刷新「我的角色卡」列表
 function onSheetsChanged() { loadMySheets() }
 
 onMounted(() => {
   loadMySheets()
   loadLibrary()
+  loadRollTables()
   if (canViewAllSheets.value) loadSheets()  // /admin/characters 仅管理员；玩家跳过避免 401
   actorStore.load()
   itemStore.load()
@@ -686,6 +795,17 @@ onUnmounted(() => window.removeEventListener('sheets-changed', onSheetsChanged))
 .lib-io:disabled { background: #ccc; cursor: not-allowed; }
 .lib-io.import { background: #0a7; display: inline-flex; align-items: center; }
 .lib-count { font-size: 11px; color: #999; align-self: center; margin-left: auto; }
+/* 抽取表 */
+.draw-result { background: #fff8e0; border: 1px solid #f0c040; border-radius: 6px;
+  padding: 8px 10px; margin-bottom: 8px; font-size: 13px; }
+.draw-text { font-weight: 700; color: #c60; }
+.draw-eff { margin-top: 4px; font-size: 12px; color: #666; }
+.draw-btn { background: #fa0; color: #1a1a2e; border-color: #fa0; font-weight: 600; }
+.rt-entries { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ddd; }
+.rt-entries .hint { font-size: 11px; color: #888; margin: 0 0 6px; }
+.rt-entry-row { display: flex; gap: 6px; margin-bottom: 4px; align-items: center; }
+.rt-weight { width: 56px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; }
+.rt-text { flex: 1; padding: 4px; border: 1px solid #ccc; border-radius: 3px; }
 .actor-card.dragging { opacity: 0.6; background: #e8f0ff; box-shadow: 0 0 0 2px #0f3460; }
 .mini-btn { padding: 2px 6px; border: 1px solid #ccc; background: #fff;
   border-radius: 2px; cursor: pointer; font-size: 11px; }
