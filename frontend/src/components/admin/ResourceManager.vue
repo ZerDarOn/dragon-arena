@@ -50,7 +50,7 @@
 
     <!-- 怪物模板库 -->
     <div v-if="active === 'monsters'" class="panel">
-      <div class="add-form">
+      <div class="add-form" v-if="canManageLibrary">
         <input v-model="newMonster.name" placeholder="怪物名称" />
         <input type="number" v-model.number="newMonster.hp" placeholder="HP" />
         <input type="number" v-model.number="newMonster.armor" placeholder="护甲" />
@@ -65,7 +65,7 @@
           <strong>{{ m.name }}</strong>
           <span class="meta">HP{{ m.hp }} 甲{{ m.armor }} 视{{ m.vision_range }}
             <span v-if="m.darkvision" class="badge">暗视</span></span>
-          <button class="del" @click="monsters.splice(i, 1)">删</button>
+          <button v-if="canManageLibrary" class="del" @click="monsters.splice(i, 1)">删</button>
         </li>
         <li v-if="!monsters.length" class="empty">暂无怪物模板</li>
       </ul>
@@ -73,13 +73,14 @@
 
     <!-- 装备池 -->
     <div v-if="active === 'equip'" class="panel">
-      <div class="add-form">
+      <div class="add-form" v-if="canManageLibrary">
         <input v-model="newEquip" placeholder="装备/外挂名称" @keyup.enter="addEquip" />
         <button @click="addEquip">添加</button>
       </div>
       <div class="chip-pool">
-        <span v-for="(e, i) in equips" :key="i" class="chip removable" @click="equips.splice(i, 1)">
-          {{ e }} ✕
+        <span v-for="(e, i) in equips" :key="i" class="chip" :class="{ removable: canManageLibrary }"
+              @click="canManageLibrary && equips.splice(i, 1)">
+          {{ e }} <span v-if="canManageLibrary">✕</span>
         </span>
         <span v-if="!equips.length" class="empty">暂无装备</span>
       </div>
@@ -88,23 +89,23 @@
     <!-- 角色卡模板（Actor 库）-->
     <div v-if="active === 'actors'" class="panel">
       <div class="add-form">
-        <button @click="newActor" class="add-btn">+ 新建角色</button>
+        <button v-if="canManageLibrary" @click="newActor" class="add-btn">+ 新建角色</button>
         <input v-model="actorFilter" placeholder="搜索..." class="search-input" />
       </div>
-      <div v-if="actorStore.actors.length === 0" class="empty">暂无角色卡模板<br/><small>新建后可拖拽到地图生成 Token</small></div>
+      <div v-if="actorStore.actors.length === 0" class="empty">暂无角色卡模板<br/><small v-if="canSpawnFromLibrary">新建后可拖拽到地图生成 Token</small></div>
       <ul class="actor-list">
         <li v-for="a in filteredActors" :key="a.id" class="actor-card"
             :class="{ dragging: dragActorId === a.id }"
-            draggable="true" @dragstart="onActorDragStart($event, a)" @dragend="dragActorId = null"
-            @click="editActor(a)"
-            :title="`拖拽「${a.name}」到地图投放`">
+            :draggable="canSpawnFromLibrary" @dragstart="onActorDragStart($event, a)" @dragend="dragActorId = null"
+            @click="canManageLibrary && editActor(a)"
+            :title="canSpawnFromLibrary ? `拖拽「${a.name}」到地图投放` : a.name">
           <img v-if="a.avatar_url" :src="a.avatar_url" class="actor-avatar" />
           <div v-else class="actor-avatar placeholder">{{ a.name[0] }}</div>
           <div class="actor-info">
             <div class="actor-name">{{ a.name }}</div>
             <div class="actor-meta">{{ typeLabel(a.type) }} · HP{{ a.hp }}/{{ a.max_hp }} · 甲{{ a.armor }}</div>
           </div>
-          <div class="actor-actions">
+          <div class="actor-actions" v-if="canManageLibrary">
             <button class="mini-btn" @click.stop="duplicateActor(a)">复制</button>
             <button class="mini-btn danger" @click.stop="deleteActor(a.id)">删</button>
           </div>
@@ -170,19 +171,19 @@
     <!-- 道具库 -->
     <div v-if="active === 'items'" class="panel">
       <div class="add-form">
-        <button @click="newItem" class="add-btn">+ 新建道具</button>
+        <button v-if="canManageLibrary" @click="newItem" class="add-btn">+ 新建道具</button>
         <input v-model="itemFilter" placeholder="搜索..." class="search-input" />
       </div>
-      <div v-if="itemStore.items.length === 0" class="empty">暂无道具<br/><small>新建后可以挂在 NPC 商店货架上出售</small></div>
+      <div v-if="itemStore.items.length === 0" class="empty">暂无道具<br/><small v-if="canManageLibrary">新建后可以挂在 NPC 商店货架上出售</small></div>
       <ul class="actor-list">
-        <li v-for="i in filteredItems" :key="i.id" class="actor-card" @click="editItem(i)">
+        <li v-for="i in filteredItems" :key="i.id" class="actor-card" @click="canManageLibrary && editItem(i)">
           <img v-if="i.icon_url" :src="i.icon_url" class="actor-avatar" />
           <div v-else class="actor-avatar placeholder">{{ i.name[0] }}</div>
           <div class="actor-info">
             <div class="actor-name">{{ i.name }} <span class="badge">{{ categoryLabel(i.category) }}</span></div>
             <div class="actor-meta">{{ i.description || '无描述' }} · {{ i.price > 0 ? i.price + ' 金币' : '不可购买' }}</div>
           </div>
-          <div class="actor-actions">
+          <div class="actor-actions" v-if="canManageLibrary">
             <button class="mini-btn danger" @click.stop="deleteItem(i.id)">删</button>
           </div>
         </li>
@@ -219,7 +220,7 @@
 
     <!-- 光源/物件模板 -->
     <div v-if="active === 'objects'" class="panel">
-      <div class="add-form">
+      <div class="add-form" v-if="canManageLibrary">
         <input v-model="newObj.name" placeholder="物件名（火把/篝火/宝箱...）" />
         <select v-model="newObj.kind">
           <option value="light">光源</option>
@@ -234,7 +235,7 @@
         <li v-for="(o, i) in objects" :key="i">
           <strong>{{ o.name }}</strong>
           <span class="meta">{{ kindLabel(o.kind) }}<span v-if="o.kind === 'light'"> · 半径{{ o.light_radius }}</span></span>
-          <button class="del" @click="objects.splice(i, 1)">删</button>
+          <button v-if="canManageLibrary" class="del" @click="objects.splice(i, 1)">删</button>
         </li>
         <li v-if="!objects.length" class="empty">暂无物件模板</li>
       </ul>
@@ -249,11 +250,14 @@ import type { CharacterSheet, Actor, ActorCreate, Item, ItemCreate } from '../..
 import { monsters, equips, objects } from '../../stores/resources'
 import { useActorStore } from '../../stores/actors'
 import { useItemStore } from '../../stores/items'
+import { usePermission } from '../../composables/usePermission'
 
 const actorStore = useActorStore()
 const itemStore = useItemStore()
+// 所有人都能读资源库；写操作（增删改）和拖拽落子按权限锁，角色卡库仅管理员可见。
+const { canManageLibrary, canSpawnFromLibrary, canViewAllSheets } = usePermission()
 
-const tabs = [
+const allTabs = [
   { key: 'sheets', label: '角色卡库' },
   { key: 'actors', label: '角色模板' },
   { key: 'items', label: '道具库' },
@@ -261,7 +265,9 @@ const tabs = [
   { key: 'equip', label: '装备池' },
   { key: 'objects', label: '物件' },
 ]
-const active = ref('sheets')
+// 角色卡库含他人底牌，仅管理员可见；其余资源库对所有人开放（只读）
+const tabs = computed(() => allTabs.filter((t) => t.key !== 'sheets' || canViewAllSheets.value))
+const active = ref(canViewAllSheets.value ? 'sheets' : 'actors')
 
 // 角色卡库
 const sheets = ref<CharacterSheet[]>([])
@@ -450,14 +456,16 @@ async function deleteItem(id: string) {
 }
 
 onMounted(() => {
-  loadSheets()
+  if (canViewAllSheets.value) loadSheets()  // /admin/characters 仅管理员；玩家跳过避免 401
   actorStore.load()
   itemStore.load()
 })
 </script>
 
 <style scoped>
-.res-mgr { min-width: 480px; font-size: 13px; }
+/* 自适应宽度：在导航弹窗里能撑开，在战役态 300px 资源库侧栏里也不溢出 */
+.res-mgr { min-width: 0; width: 100%; font-size: 13px; }
+.tabs { flex-wrap: wrap; }
 .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 8px; }
 .tabs button { flex: 1; padding: 6px; border: none; background: transparent;
   cursor: pointer; font-size: 12px; border-bottom: 2px solid transparent; }

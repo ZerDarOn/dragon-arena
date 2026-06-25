@@ -14,7 +14,7 @@
           <button @click="leaveBattle">返回大厅</button>
         </template>
         <button v-if="auth.isAdmin" @click="showUsers = true">用户管理</button>
-        <button v-if="auth.isAdmin" @click="showRes = true">资源管理</button>
+        <button @click="showRes = true">资源库</button>
         <button @click="onLogout">登出</button>
       </div>
     </header>
@@ -23,11 +23,16 @@
       {{ wsStatus === 'reconnecting' ? '⚠ 与服务器断开，正在重连…' : '⚠ 正在连接服务器…' }}
     </div>
 
-    <!-- 资源管理侧边栏（战役态，管理员，左侧） -->
-    <aside v-if="inBattle && auth.isAdmin && showResPanel" class="res-panel">
-      <MiniResPanel @close="showResPanel = false" />
+    <!-- 资源库侧边栏（战役态，全员可读，左侧）—— 与导航「资源库」共用同一个 ResourceManager；
+         写操作/拖拽落子按权限锁（usePermission）。不再维护单独的 MiniResPanel。 -->
+    <aside v-if="inBattle && showResPanel" class="res-panel">
+      <div class="res-panel-head">
+        <span>📚 资源库</span>
+        <button class="res-close" @click="showResPanel = false">×</button>
+      </div>
+      <div class="res-panel-body"><ResourceManager /></div>
     </aside>
-    <button v-if="inBattle && auth.isAdmin && !showResPanel" class="res-toggle" @click="showResPanel = true">📚</button>
+    <button v-if="inBattle && !showResPanel" class="res-toggle" @click="showResPanel = true">📚</button>
 
     <!-- 角色卡侧边栏（战役态，右侧） -->
     <aside v-if="inBattle && showSheetPanel" class="sheet-panel">
@@ -174,8 +179,8 @@
       <AdminUserPanel />
     </Modal>
 
-    <!-- 资源管理弹窗（待机态） -->
-    <Modal v-if="showRes && auth.isAdmin" title="资源管理（管理员）" @close="showRes = false">
+    <!-- 资源库弹窗（待机态）—— 所有人可读，写操作按权限锁（见 ResourceManager / usePermission） -->
+    <Modal v-if="showRes" title="资源库" @close="showRes = false">
       <ResourceManager />
     </Modal>
 
@@ -302,7 +307,6 @@ import Modal from '../components/ui/Modal.vue'
 import CharacterSheetEditor from '../components/sheets/CharacterSheetEditor.vue'
 import AdminUserPanel from '../components/admin/AdminUserPanel.vue'
 import ResourceManager from '../components/admin/ResourceManager.vue'
-import MiniResPanel from '../components/admin/MiniResPanel.vue'
 import MiniSheetPanel from '../components/sheets/MiniSheetPanel.vue'
 
 const router = useRouter()
@@ -1009,7 +1013,10 @@ onUnmounted(() => { disconnectWs() })
 .damage-flash.shake { opacity: 1; animation: shake 0.5s ease-in-out; }
 @keyframes shake { 0%,100% { transform: translate(0,0); } 20% { transform: translate(-4px,2px); } 40% { transform: translate(4px,-2px); } 60% { transform: translate(-2px,4px); } 80% { transform: translate(2px,-4px); } }
 /* 资源库侧边栏 — 收窄到 200px */
-.res-panel { position: fixed; left: 0; top: 48px; bottom: 0; width: 200px; background: #f8f9fa; border-right: 1px solid #ddd; z-index: 50; display: flex; flex-direction: column; }
+.res-panel { position: fixed; left: 0; top: 48px; bottom: 0; width: 300px; background: #f8f9fa; border-right: 1px solid #ddd; z-index: 50; display: flex; flex-direction: column; }
+.res-panel-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #0f3460; color: #fff; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+.res-panel-head .res-close { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; line-height: 1; }
+.res-panel-body { flex: 1; overflow-y: auto; padding: 8px; }
 .res-toggle { position: fixed; left: 0; top: 50%; transform: translateY(-50%); z-index: 49; padding: 6px; background: #0f3460; color: #fff; border: none; border-radius: 0 4px 4px 0; cursor: pointer; font-size: 14px; }
 /* 角色卡侧边栏 — 收窄到 200px，放右侧 */
 .sheet-panel { position: fixed; right: 0; top: 48px; bottom: 0; width: 200px; background: #f8f9fa; border-left: 1px solid #ddd; z-index: 50; display: flex; flex-direction: column; }
