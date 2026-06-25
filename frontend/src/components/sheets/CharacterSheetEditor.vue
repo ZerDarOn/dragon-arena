@@ -306,6 +306,7 @@ async function onSave() {
     }
     saved.value = true
     await load()
+    window.dispatchEvent(new CustomEvent('sheets-changed'))  // 通知资源库「我的角色卡」刷新
   } catch (err: any) {
     error.value = err.message || '保存失败'
   }
@@ -316,6 +317,7 @@ async function onDelete(s: CharacterSheet) {
   try {
     await deleteCharacter(s.id)
     await load()
+    window.dispatchEvent(new CustomEvent('sheets-changed'))  // 通知资源库「我的角色卡」刷新
     if (editing.value?.id === s.id) editing.value = null
   } catch (err: any) {
     error.value = err.message

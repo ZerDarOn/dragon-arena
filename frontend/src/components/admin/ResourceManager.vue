@@ -5,6 +5,29 @@
               :class="{ active: active === t.key }">{{ t.label }}</button>
     </div>
 
+    <!-- 我的角色卡（所有人）-->
+    <div v-if="active === 'mysheets'" class="panel">
+      <div class="add-form">
+        <button class="add-btn" @click="emit('create-sheet')">+ 新建角色卡</button>
+      </div>
+      <div v-if="mySheetsLoading" class="loading">加载中...</div>
+      <ul v-else class="actor-list">
+        <li v-for="s in mySheets" :key="s.id" class="actor-card"
+            draggable="true" @dragstart="onSheetDragStart($event, s)"
+            @click="emit('edit-sheet', s)"
+            :title="`拖拽「${s.name}」到地图落子，或点击编辑`">
+          <img v-if="s.avatar_url" :src="s.avatar_url" class="actor-avatar" />
+          <div v-else class="actor-avatar placeholder">{{ s.name[0] || '?' }}</div>
+          <div class="actor-info">
+            <div class="actor-name">{{ s.name || '未命名' }}</div>
+            <div class="actor-meta">{{ s.profession || '—' }} · HP{{ s.hp_base }} · 甲{{ s.armor_base }} · AP{{ s.ap_base }}</div>
+          </div>
+          <div class="drag-hint">⋮⋮</div>
+        </li>
+        <li v-if="!mySheets.length" class="empty">还没有角色卡，点上方「+ 新建角色卡」创建一张</li>
+      </ul>
+    </div>
+
     <!-- 角色卡库 -->
     <div v-if="active === 'sheets'" class="panel">
       <div v-if="sheetsLoading" class="loading">加载中...</div>
@@ -244,8 +267,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { listAllCharacters, uploadAvatar } from '../../api/rest'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { listAllCharacters, listMyCharacters, uploadAvatar } from '../../api/rest'
 import type { CharacterSheet, Actor, ActorCreate, Item, ItemCreate } from '../../api/types'
 import { monsters, equips, objects } from '../../stores/resources'
 import { useActorStore } from '../../stores/actors'
@@ -257,7 +280,13 @@ const itemStore = useItemStore()
 // 所有人都能读资源库；写操作（增删改）和拖拽落子按权限锁，角色卡库仅管理员可见。
 const { canManageLibrary, canSpawnFromLibrary, canViewAllSheets } = usePermission()
 
+const emit = defineEmits<{
+  (e: 'edit-sheet', sheet: CharacterSheet): void
+  (e: 'create-sheet'): void
+}>()
+
 const allTabs = [
+  { key: 'mysheets', label: '我的角色卡' },
   { key: 'sheets', label: '角色卡库' },
   { key: 'actors', label: '角色模板' },
   { key: 'items', label: '道具库' },
@@ -265,9 +294,9 @@ const allTabs = [
   { key: 'equip', label: '装备池' },
   { key: 'objects', label: '物件' },
 ]
-// 角色卡库含他人底牌，仅管理员可见；其余资源库对所有人开放（只读）
+// 「角色卡库」含他人底牌仅管理员可见；其余（含「我的角色卡」）对所有人开放
 const tabs = computed(() => allTabs.filter((t) => t.key !== 'sheets' || canViewAllSheets.value))
-const active = ref(canViewAllSheets.value ? 'sheets' : 'actors')
+const active = ref('mysheets')
 
 // 角色卡库
 const sheets = ref<CharacterSheet[]>([])
@@ -282,6 +311,20 @@ async function loadSheets() {
 }
 function toggleSheet(id: string) {
   expandedSheet.value = expandedSheet.value === id ? null : id
+}
+
+// ---- 我的角色卡（所有人）：列出本人角色卡，可拖到地图落子 / 点开编辑 / 新建 ----
+const mySheets = ref<CharacterSheet[]>([])
+const mySheetsLoading = ref(false)
+async function loadMySheets() {
+  mySheetsLoading.value = true
+  try { mySheets.value = await listMyCharacters() }
+  catch (e) { console.warn(e) }
+  finally { mySheetsLoading.value = false }
+}
+function onSheetDragStart(e: DragEvent, s: CharacterSheet) {
+  e.dataTransfer?.setData('application/json', JSON.stringify({ kind: 'character_sheet', sheet: s }))
+  e.dataTransfer!.effectAllowed = 'copy'
 }
 
 // 怪物模板（共享 store）
@@ -455,11 +498,17 @@ async function deleteItem(id: string) {
   await itemStore.remove(id)
 }
 
+// 角色卡保存/新建/删除后（CharacterSheetEditor 派发）刷新「我的角色卡」列表
+function onSheetsChanged() { loadMySheets() }
+
 onMounted(() => {
+  loadMySheets()
   if (canViewAllSheets.value) loadSheets()  // /admin/characters 仅管理员；玩家跳过避免 401
   actorStore.load()
   itemStore.load()
+  window.addEventListener('sheets-changed', onSheetsChanged)
 })
+onUnmounted(() => window.removeEventListener('sheets-changed', onSheetsChanged))
 </script>
 
 <style scoped>
@@ -522,6 +571,7 @@ onMounted(() => {
 .actor-name { font-weight: bold; font-size: 13px; }
 .actor-meta { font-size: 11px; color: #666; }
 .actor-actions { display: flex; gap: 2px; }
+.drag-hint { color: #ccc; font-size: 12px; margin-left: auto; cursor: grab; }
 .actor-card.dragging { opacity: 0.6; background: #e8f0ff; box-shadow: 0 0 0 2px #0f3460; }
 .mini-btn { padding: 2px 6px; border: 1px solid #ccc; background: #fff;
   border-radius: 2px; cursor: pointer; font-size: 11px; }
