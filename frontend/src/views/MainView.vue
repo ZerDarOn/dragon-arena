@@ -105,10 +105,16 @@
           </div>
           <!-- 攻击多选目标条 -->
           <div v-if="combatMode === 'attack'" class="attack-bar">
-            <span class="ab-hint">点击敌方棋子选为目标（可多选）</span>
+            <span class="ab-hint">点敌人选目标（可多选）</span>
+            <label class="ab-mod">修正 <input type="number" v-model.number="attackModifier" /></label>
+            <select v-model="attackAdv" class="ab-adv" title="优势=2D20取高，劣势=取低">
+              <option value="normal">普通</option>
+              <option value="adv">优势</option>
+              <option value="dis">劣势</option>
+            </select>
             <span class="ab-count">已选 {{ attackTargets.length }}</span>
             <button class="ab-confirm" :disabled="!attackTargets.length" @click="confirmAttack">
-              攻击选中目标
+              🎲 攻击选中目标
             </button>
             <button class="ab-cancel" @click="cancelAttack">取消</button>
           </div>
@@ -297,6 +303,7 @@ import {
   listMyCharacters,
 } from '../api/rest'
 import { pushToast } from '../composables/useToast'
+import { playAnimation } from '../services/diceBoxBridge'
 import { useFogOfWar } from '../composables/useFogOfWar'
 import type { Room, CharacterSheet } from '../api/types'
 import ChatPanel from '../components/chat/ChatPanel.vue'
@@ -476,8 +483,20 @@ function applyOptimisticUpdate(msg: any) {
   }
 }
 
-// 攻击目标（多选）
+// 攻击目标（多选）+ 玩家本次声明的修正/优势
 const attackTargets = ref<string[]>([])
+const attackModifier = ref(0)
+const attackAdv = ref<'normal' | 'adv' | 'dis'>('normal')
+
+// 从战斗日志里挖出命中 D20 的原始点数（用于 3D 骰子动画）
+function extractHitRoll(log: any): number | null {
+  for (const r of log.results || []) {
+    for (const e of r.effects || []) {
+      if (e.hit && typeof e.hit.roll === 'number') return e.hit.roll
+    }
+  }
+  return null
+}
 
 function onCombatMode(mode: 'attack' | 'sprint' | null) {
   combatMode.value = mode
@@ -497,9 +516,13 @@ function toggleAttackTarget(id: string) {
 function confirmAttack() {
   const attacker = selfTokenId.value
   if (!attacker || !attackTargets.value.length) return
-  // 逐个目标发起攻击（每次消耗 1AP，后端按规则校验，AP 不足会被拒）
+  // 逐个目标发起攻击（每次消耗 1AP，后端按规则校验，AP 不足会被拒）；带上玩家声明的修正/优势
+  const advMap = { normal: '', adv: 'adv', dis: 'dis' } as const
   for (const tid of attackTargets.value) {
-    wsSend({ type: 'attack', payload: { attacker_id: attacker, defender_id: tid } })
+    wsSend({ type: 'attack', payload: {
+      attacker_id: attacker, defender_id: tid,
+      modifier: attackModifier.value || 0, advantage: advMap[attackAdv.value],
+    } })
   }
   attackTargets.value = []
   combatMode.value = null
@@ -677,6 +700,11 @@ function dispatchMessage(msg: ServerMessage) {
   else if (m.type === 'chat') chat.addMessage(m.payload)
   else if (m.type === 'combat_log') {
     combatRef.value?.addLog(m.payload)
+    // 我发起的攻击 → 把命中 D20 用 3D 骰子甩出来（玩家看得到落点；结果仍是服务端权威的）
+    if (m.payload.actor_id === selfTokenId.value) {
+      const roll = extractHitRoll(m.payload)
+      if (roll != null) playAnimation([{ sides: 20, value: roll }]).catch(() => {})
+    }
     // 检查自己是否受到伤害
     const selfId = selfTokenId.value
     if (selfId && m.payload.target_id === selfId) {
@@ -959,6 +987,9 @@ onUnmounted(() => { disconnectWs() })
 .attack-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px;
   background: #2a1010; color: #fff; border-bottom: 1px solid #500; font-size: 13px; }
 .attack-bar .ab-hint { color: #f99; }
+.attack-bar .ab-mod { color: #fcc; display: flex; align-items: center; gap: 4px; }
+.attack-bar .ab-mod input { width: 48px; padding: 2px 4px; border: 1px solid #844; border-radius: 3px; background: #1a0808; color: #fff; }
+.attack-bar .ab-adv { padding: 2px 4px; border: 1px solid #844; border-radius: 3px; background: #1a0808; color: #fff; }
 .attack-bar .ab-count { color: #fa0; font-weight: bold; }
 .attack-bar .ab-confirm { margin-left: auto; padding: 4px 14px; background: #c33; color: #fff;
   border: none; border-radius: 3px; cursor: pointer; font-weight: bold; }

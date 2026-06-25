@@ -693,11 +693,14 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                         gs._register_default_attack_rules(attacker)
                     # 执行攻击（锁内）
                     async with gs.lock:
+                        adv = p.get("advantage", "")
                         context = CombatContext(
                             action="attack",
                             actor=attacker,
                             target=defender,
                             room_config=gs.room.config,
+                            attack_bonus=int(p.get("modifier", 0) or 0),
+                            advantage=adv if adv in ("adv", "dis") else "",
                         )
                         combat_log = gs.combat_engine.execute_action(context)
                         # 检查击杀

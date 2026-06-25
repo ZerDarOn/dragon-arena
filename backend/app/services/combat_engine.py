@@ -65,7 +65,14 @@ class Effect(BaseModel):
         if self.type == "roll_dice":
             sides = self.params.get("sides", 20)
             modifier = self.params.get("modifier", 0)
-            r = roll_dice(sides=sides, modifier=modifier)
+            # 玩家可声明优势/劣势：D20 摇两颗取高/取低（仅对 d20 生效）
+            adv = getattr(context, "advantage", "")
+            if sides == 20 and adv in ("adv", "dis"):
+                r1 = roll_dice(sides=20, modifier=modifier)
+                r2 = roll_dice(sides=20, modifier=modifier)
+                r = (max if adv == "adv" else min)([r1, r2], key=lambda x: x.value)
+            else:
+                r = roll_dice(sides=sides, modifier=modifier)
             result["dice"] = r.model_dump()
             context.dice_results.append(r)
 
@@ -73,7 +80,8 @@ class Effect(BaseModel):
             # 计算命中：D20 + bonus >= DC
             distance = self._get_distance(context)
             dc = self._get_dc_for_distance(distance, context)
-            bonus = self.params.get("bonus", 0)
+            # 规则自带加成 + 玩家本次声明的攻击修正
+            bonus = self.params.get("bonus", 0) + getattr(context, "attack_bonus", 0)
             # 取最后一次掷骰结果
             if not context.dice_results:
                 r = roll_dice(sides=20, modifier=bonus)
@@ -273,6 +281,8 @@ class CombatContext(BaseModel):
     dice_results: List[DiceResult] = []
     hit_result: Optional[HitResult] = None
     damage_result: Optional[DamageResult] = None
+    attack_bonus: int = 0     # 玩家本次攻击声明的修正值
+    advantage: str = ""       # "" | adv | dis（优势/劣势，D20 取高/取低）
 
     class Config:
         arbitrary_types_allowed = True
