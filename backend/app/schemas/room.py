@@ -5,11 +5,28 @@ from app.schemas.map import GameMap
 
 
 class StateTag(BaseModel):
+    """状态标签 — Phase 3 升级为 FVTT 风格的自描述效果对象。
+
+    数据驱动设计（替代硬编码 if-elif）：
+    - mode: add/multiply/override/mark。None = 纯标记（如隐身，由业务逻辑检查）
+    - target_field: 作用于 token 的哪个属性（如 "armor"），配合 mode 使用
+    - value: 效果值（add 时为增量，override 时为目标值，multiply 时为系数）
+    - dot_damage: 每回合周期伤害（点燃/中毒/流血）
+    - original_value: 应用前记录的原值，过期恢复用
+    - source: 效果来源（技能名/道具名/毒圈），用于追溯
+    """
     id: str
     name: str
     description: str
     ttl: int
     intensity: Optional[int] = None
+    # Phase 3: 数据驱动效果字段
+    mode: Optional[str] = None  # add | multiply | override | mark | None
+    target_field: Optional[str] = None  # "armor" / "hp" / "ap" 等
+    value: Optional[float] = None
+    dot_damage: int = 0
+    original_value: Optional[float] = None
+    source: Optional[str] = None
 
 
 class Token(BaseModel):
@@ -69,3 +86,5 @@ class Room(BaseModel):
     turn_order: List[str] = Field(default_factory=list)
     big_turn: int = 0
     sub_turn: int = 0
+    # Phase 2: 吃鸡排名——按淘汰顺序记录（先死者垫底）
+    elimination_order: List[str] = Field(default_factory=list)

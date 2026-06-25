@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Dict
 from fastapi import WebSocket, WebSocketDisconnect
@@ -9,6 +10,7 @@ from app.services.turn_service import TurnService
 from app.services.vision_service import VisionService
 from app.services.event_log_service import EventLogService
 from app.services.map_service import MapService
+from app.services.room_snapshot_storage import RoomSnapshotStorage
 from app.services.combat_engine import CombatEngine, CombatContext, create_attack_rule
 from app.schemas.map import GameMap
 from app.schemas.event import GameEvent
@@ -32,6 +34,12 @@ class RoomGameState:
         self.turn_svc = TurnService(room)
         self.event_log = EventLogService()
         self.combat_engine = CombatEngine()
+        # 并发安全 + 持久化（Phase 1）
+        self.lock = asyncio.Lock()
+        self.snapshot_storage = None  # 外部注入（handler 启动时）
+        # Phase 2: 回合时限
+        self.turn_timer: asyncio.Task | None = None
+        self.turn_deadline: float | None = None  # Unix 时间戳，前端用 (deadline - now) 渲染倒计时
 
     def _get_distance(self, a: Token, b: Token) -> int:
         if not a.position or not b.position:
@@ -58,15 +66,78 @@ class RoomGameState:
                 create_attack_rule("徒手攻击", "melee", base_damage=5, dice_expr="D20-8", ap_cost=1),
             ])
 
+    def start_turn_timer(self, callback=None) -> None:
+        """启动回合倒计时。超时后自动 end_turn（走锁），然后调 callback（广播）。
+
+        callback 是 async 函数，接收无参数；用于锁外广播。
+        时限 <= 0 时不启动（关闭时限）。
+        """
+        self.cancel_turn_timer()
+        limit = self.room.config.turn_time_limit_sec
+        if limit <= 0:
+            self.turn_deadline = None
+            return
+        import time as _time
+        self.turn_deadline = _time.time() + limit
+        self._timer_callback = callback
+        self.turn_timer = asyncio.create_task(self._timer_tick(limit))
+
+    def cancel_turn_timer(self) -> None:
+        """取消回合倒计时。"""
+        if self.turn_timer and not self.turn_timer.done():
+            self.turn_timer.cancel()
+        self.turn_timer = None
+        self.turn_deadline = None
+
+    async def _timer_tick(self, delay: float) -> None:
+        """倒计时任务：等待 delay 秒后获取锁 → end_turn → 快照 → callback。"""
+        try:
+            await asyncio.sleep(delay)
+            async with self.lock:
+                self.turn_svc.end_turn()
+                if self.snapshot_storage:
+                    self.snapshot_storage.save(self.room.id, self.room.model_dump_json())
+            self.turn_timer = None
+            self.turn_deadline = None
+            # 广播在锁外
+            cb = getattr(self, "_timer_callback", None)
+            if cb:
+                import inspect
+                result = cb()
+                if inspect.isawaitable(result):
+                    await result
+        except asyncio.CancelledError:
+            pass
+
 
 _game_states: Dict[str, RoomGameState] = {}
+_snapshot_storage = None
+
+def _get_snapshot_storage() -> RoomSnapshotStorage:
+    global _snapshot_storage
+    if _snapshot_storage is None:
+        import os
+        db_path = os.environ.get("DRAGON_ARENA_DB_PATH", "backend/data/users.db")
+        _snapshot_storage = RoomSnapshotStorage(db_path=db_path)
+    return _snapshot_storage
 
 def get_game_state(room_id: str, room_service: RoomService) -> RoomGameState | None:
     room = room_service.get_room(room_id)
     if not room:
         return None
     if room_id not in _game_states:
-        _game_states[room_id] = RoomGameState(room)
+        # Phase 1: 进程重启后从快照恢复
+        storage = _get_snapshot_storage()
+        snapshot_json = storage.load(room_id)
+        if snapshot_json is not None:
+            try:
+                room = Room.model_validate_json(snapshot_json)
+            except Exception:
+                # 快照损坏则回退到 room_service 的原始 room
+                pass
+        gs = RoomGameState(room)
+        gs.snapshot_storage = storage
+        _game_states[room_id] = gs
     return _game_states[room_id]
 
 def _log_event(gs: RoomGameState, player_id: str, action: str, target: str = None,
@@ -262,74 +333,95 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                         continue
                     x, y = int(p.get("x", 0)), int(p.get("y", 0))
                     token_id = f"{actor['type']}_{int(time.time() * 1000) % 1000000}"
-                    gs.room.tokens[token_id] = Token(
-                        id=token_id, type=actor["type"], actor_id=actor_id,
-                        character_name=actor.get("name", ""),
-                        position={"x": x, "y": y},
-                        hp=actor["hp"], max_hp=actor["max_hp"],
-                        armor=actor["armor"], ap=actor["ap"], max_ap=actor["max_ap"],
-                        vision_range=actor["vision_range"],
-                        darkvision=bool(actor["darkvision"]),
-                        listen_radius=actor["listen_radius"],
-                        passive_perception=actor["passive_perception"],
-                        stealth=actor["stealth"],
-                        equipment_slots=actor.get("equipment_slots") or [None]*6,
-                        skill_slots=actor.get("skill_slots") or [None, None],
-                        backpack=actor.get("backpack") or [],
-                        avatar_url=actor.get("avatar_url"),
-                        is_shop=bool(actor.get("is_shop", False)),
-                        shop_items=actor.get("shop_items") or [],
-                    )
-                    gs.room.turn_order.append(token_id)
-                    _log_event(gs, player_id, "spawn_token", target=token_id,
-                               params={"actor_id": actor_id, "x": x, "y": y})
+                    async with gs.lock:
+                        gs.room.tokens[token_id] = Token(
+                            id=token_id, type=actor["type"], actor_id=actor_id,
+                            character_name=actor.get("name", ""),
+                            position={"x": x, "y": y},
+                            hp=actor["hp"], max_hp=actor["max_hp"],
+                            armor=actor["armor"], ap=actor["ap"], max_ap=actor["max_ap"],
+                            vision_range=actor["vision_range"],
+                            darkvision=bool(actor["darkvision"]),
+                            listen_radius=actor["listen_radius"],
+                            passive_perception=actor["passive_perception"],
+                            stealth=actor["stealth"],
+                            equipment_slots=actor.get("equipment_slots") or [None]*6,
+                            skill_slots=actor.get("skill_slots") or [None, None],
+                            backpack=actor.get("backpack") or [],
+                            avatar_url=actor.get("avatar_url"),
+                            is_shop=bool(actor.get("is_shop", False)),
+                            shop_items=actor.get("shop_items") or [],
+                        )
+                        gs.room.turn_order.append(token_id)
+                        _log_event(gs, player_id, "spawn_token", target=token_id,
+                                   params={"actor_id": actor_id, "x": x, "y": y})
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "rotate_token":
                     token = gs.room.tokens.get(p.get("token_id"))
                     if token and _can_control(token, user, player_id):
-                        token.facing = int(p.get("facing", 0)) % 8
-                        _log_event(gs, player_id, "rotate_token",
-                                   target=p.get("token_id"), params=p)
+                        async with gs.lock:
+                            token.facing = int(p.get("facing", 0)) % 8
+                            _log_event(gs, player_id, "rotate_token",
+                                       target=p.get("token_id"), params=p)
+                            if gs.snapshot_storage:
+                                gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "size_token":
                     token = gs.room.tokens.get(p.get("token_id"))
                     if token and _can_control(token, user, player_id):
-                        token.size = max(1, min(4, int(p.get("size", 1))))
-                        _log_event(gs, player_id, "size_token",
-                                   target=p.get("token_id"), params=p)
+                        async with gs.lock:
+                            token.size = max(1, min(4, int(p.get("size", 1))))
+                            _log_event(gs, player_id, "size_token",
+                                       target=p.get("token_id"), params=p)
+                            if gs.snapshot_storage:
+                                gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "set_terrain":
-                    gs.map_svc.set_terrain(p.get("x"), p.get("y"), p.get("type", "flat"))
-                    _log_event(gs, player_id, "set_terrain", params=p)
+                    async with gs.lock:
+                        gs.map_svc.set_terrain(p.get("x"), p.get("y"), p.get("type", "flat"))
+                        _log_event(gs, player_id, "set_terrain", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "set_cell_meta":
                     # 设置黑暗/光照等元数据（DM 笔刷）
                     x, y = int(p.get("x", 0)), int(p.get("y", 0))
-                    if "is_dark" in p:
-                        gs.map_svc.set_dark(x, y, bool(p["is_dark"]))
-                    if "light_radius" in p:
-                        gs.map_svc.set_light(x, y, int(p["light_radius"]))
-                    _log_event(gs, player_id, "set_cell_meta", params=p)
+                    async with gs.lock:
+                        if "is_dark" in p:
+                            gs.map_svc.set_dark(x, y, bool(p["is_dark"]))
+                        if "light_radius" in p:
+                            gs.map_svc.set_light(x, y, int(p["light_radius"]))
+                        _log_event(gs, player_id, "set_cell_meta", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "fill_terrain":
-                    gs.map_svc.fill_area(
-                        p.get("x1"), p.get("y1"), p.get("x2"), p.get("y2"),
-                        p.get("type", "flat"),
-                    )
-                    _log_event(gs, player_id, "fill_terrain", params=p)
+                    async with gs.lock:
+                        gs.map_svc.fill_area(
+                            p.get("x1"), p.get("y1"), p.get("x2"), p.get("y2"),
+                            p.get("type", "flat"),
+                        )
+                        _log_event(gs, player_id, "fill_terrain", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "resize_map":
                     w, h = p.get("width", 30), p.get("height", 30)
-                    gs.room.config = gs.room.config.model_copy(
-                        update={"map_width": w, "map_height": h}
-                    )
-                    # Rebuild map (clears existing terrains — acceptable for MVP)
-                    gs.game_map = GameMap(width=w, height=h)
-                    gs.room.game_map = gs.game_map
-                    gs.map_svc = MapService(gs.game_map)
-                    gs.vision_svc = VisionService(gs.room, gs.game_map)
-                    gs.token_svc = TokenService(gs.room, gs.game_map)
-                    _log_event(gs, player_id, "resize_map", params=p)
+                    async with gs.lock:
+                        gs.room.config = gs.room.config.model_copy(
+                            update={"map_width": w, "map_height": h}
+                        )
+                        # Rebuild map (clears existing terrains — acceptable for MVP)
+                        gs.game_map = GameMap(width=w, height=h)
+                        gs.room.game_map = gs.game_map
+                        gs.map_svc = MapService(gs.game_map)
+                        gs.vision_svc = VisionService(gs.room, gs.game_map)
+                        gs.token_svc = TokenService(gs.room, gs.game_map)
+                        _log_event(gs, player_id, "resize_map", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "set_turn_order":
                     if not is_admin:
@@ -338,8 +430,11 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                         })
                         continue
                     order = p.get("order", [])
-                    gs.turn_svc.set_order(order)
-                    _log_event(gs, player_id, "set_turn_order", params=p)
+                    async with gs.lock:
+                        gs.turn_svc.set_order(order)
+                        _log_event(gs, player_id, "set_turn_order", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "shuffle_turn_order":
                     if not is_admin:
@@ -347,8 +442,11 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "only admin can shuffle turn order"}
                         })
                         continue
-                    gs.turn_svc.shuffle_order()
-                    _log_event(gs, player_id, "shuffle_turn_order", params=p)
+                    async with gs.lock:
+                        gs.turn_svc.shuffle_order()
+                        _log_event(gs, player_id, "shuffle_turn_order", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "force_set_actor":
                     if not is_admin:
@@ -356,8 +454,12 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "only admin can force set actor"}
                         })
                         continue
-                    gs.turn_svc.force_set_actor(p.get("token_id", ""))
-                    _log_event(gs, player_id, "force_set_actor", params=p)
+                    async with gs.lock:
+                        gs.turn_svc.force_set_actor(p.get("token_id", ""))
+                        _log_event(gs, player_id, "force_set_actor", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                    gs.start_turn_timer(callback=lambda: _broadcast_state(gs, room_id))
                     await _broadcast_state(gs, room_id)
                 elif t == "clear_combat_log":
                     if not is_admin:
@@ -365,7 +467,10 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "only admin can clear combat log"}
                         })
                         continue
-                    gs.event_log.clear()
+                    async with gs.lock:
+                        gs.event_log.clear()
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await connection_mgr.broadcast(room_id, {
                         "type": "combat_log_cleared", "payload": {}
                     })
@@ -376,10 +481,13 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                         })
                         continue
                     enabled = p.get("enabled", True)
-                    gs.room.config = gs.room.config.model_copy(
-                        update={"fog_of_war_enabled": enabled}
-                    )
-                    _log_event(gs, player_id, "set_fog_of_war", params=p)
+                    async with gs.lock:
+                        gs.room.config = gs.room.config.model_copy(
+                            update={"fog_of_war_enabled": enabled}
+                        )
+                        _log_event(gs, player_id, "set_fog_of_war", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "set_poison_circle":
                     if not is_admin:
@@ -387,13 +495,16 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "only admin can control poison circle"}
                         })
                         continue
-                    gs.turn_svc.set_poison_circle(
-                        center_x=p.get("center_x"),
-                        center_y=p.get("center_y"),
-                        radius=p.get("radius"),
-                        enabled=p.get("enabled"),
-                    )
-                    _log_event(gs, player_id, "set_poison_circle", params=p)
+                    async with gs.lock:
+                        gs.turn_svc.set_poison_circle(
+                            center_x=p.get("center_x"),
+                            center_y=p.get("center_y"),
+                            radius=p.get("radius"),
+                            enabled=p.get("enabled"),
+                        )
+                        _log_event(gs, player_id, "set_poison_circle", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "attack":
                     # 攻击交互：目标选择 → 掷骰 → 命中判定 → 伤害计算 → 应用
@@ -414,26 +525,31 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                     # 注册默认攻击规则（如果还没有）
                     if attacker_id not in gs.combat_engine.rules:
                         gs._register_default_attack_rules(attacker)
-                    # 执行攻击
-                    context = CombatContext(
-                        action="attack",
-                        actor=attacker,
-                        target=defender,
-                        room_config=gs.room.config,
-                    )
-                    combat_log = gs.combat_engine.execute_action(context)
-                    # 广播战斗结果
+                    # 执行攻击（锁内）
+                    async with gs.lock:
+                        context = CombatContext(
+                            action="attack",
+                            actor=attacker,
+                            target=defender,
+                            room_config=gs.room.config,
+                        )
+                        combat_log = gs.combat_engine.execute_action(context)
+                        # 检查击杀
+                        if defender.is_dead:
+                            # 击杀积分
+                            attacker.score += gs.room.config.score_kill
+                            attacker.gold += gs.room.config.kill_drop_gold
+                            # 记录淘汰顺序
+                            gs.turn_svc.record_elimination(defender_id)
+                            _log_event(gs, player_id, "kill", target=defender_id, params={"score": attacker.score})
+                        _log_event(gs, player_id, "attack", target=defender_id, params=combat_log)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                    # 广播战斗结果（锁外）
                     await connection_mgr.broadcast(room_id, {
                         "type": "combat_log",
                         "payload": combat_log,
                     })
-                    # 检查击杀
-                    if defender.is_dead:
-                        # 击杀积分
-                        attacker.score += gs.room.config.score_kill
-                        attacker.gold += gs.room.config.kill_drop_gold
-                        _log_event(gs, player_id, "kill", target=defender_id, params={"score": attacker.score})
-                    _log_event(gs, player_id, "attack", target=defender_id, params=combat_log)
                     await _broadcast_state(gs, room_id)
                 elif t == "defend":
                     # 防御：消耗1AP，进行察觉检定
@@ -449,10 +565,13 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "AP不足"}
                         })
                         continue
-                    token.ap -= gs.room.config.defend_ap_cost
-                    # 察觉检定：D20 + 被动觉察
-                    r = roll_dice(sides=20, modifier=token.passive_perception - 10)
-                    _log_event(gs, player_id, "defend", target=token_id, params={"roll": r.model_dump(), "ap_after": token.ap})
+                    async with gs.lock:
+                        token.ap -= gs.room.config.defend_ap_cost
+                        # 察觉检定：D20 + 被动觉察
+                        r = roll_dice(sides=20, modifier=token.passive_perception - 10)
+                        _log_event(gs, player_id, "defend", target=token_id, params={"roll": r.model_dump(), "ap_after": token.ap})
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await connection_mgr.broadcast(room_id, {
                         "type": "defend_result",
                         "payload": {"token_id": token_id, "roll": r.model_dump(), "ap_after": token.ap},
@@ -478,9 +597,12 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": f"疾跑最多{gs.room.config.sprint_distance}格"}
                         })
                         continue
-                    token.ap -= gs.room.config.sprint_ap_cost
-                    result = gs.token_svc.move_along_path(token_id, [tuple(x) for x in path])
-                    _log_event(gs, player_id, "sprint", target=token_id, params={"path": path, "ap_after": token.ap})
+                    async with gs.lock:
+                        token.ap -= gs.room.config.sprint_ap_cost
+                        result = gs.token_svc.move_along_path(token_id, [tuple(x) for x in path])
+                        _log_event(gs, player_id, "sprint", target=token_id, params={"path": path, "ap_after": token.ap})
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "use_item":
                     # 使用道具/技能
@@ -507,16 +629,19 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "道具次数已耗尽"}
                         })
                         continue
-                    # 扣除次数或从背包移除
-                    if in_backpack and item_name in token.backpack:
-                        if charges is not None:
+                    async with gs.lock:
+                        # 扣除次数或从背包移除
+                        if in_backpack and item_name in token.backpack:
+                            if charges is not None:
+                                token.item_charges[item_name] -= 1
+                            else:
+                                token.backpack.remove(item_name)
+                        elif in_slot and charges is not None:
                             token.item_charges[item_name] -= 1
-                        else:
-                            token.backpack.remove(item_name)
-                    elif in_slot and charges is not None:
-                        token.item_charges[item_name] -= 1
-                    # 广播事件让团主知道谁用了什么，效果由团主口胡（ADR-5）
-                    _log_event(gs, player_id, "use_item", target=token_id, params={"item": item_name})
+                        # 广播事件让团主知道谁用了什么，效果由团主口胡（ADR-5）
+                        _log_event(gs, player_id, "use_item", target=token_id, params={"item": item_name})
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await connection_mgr.broadcast(room_id, {
                         "type": "item_used",
                         "payload": {"token_id": token_id, "item": item_name},
@@ -555,31 +680,60 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": f"金币不足（需要{item['price']}，你有{buyer.gold}）"}
                         })
                         continue
-                    buyer.gold -= item["price"]
-                    buyer.backpack.append(item_name)
-                    _log_event(gs, player_id, "buy_item", target=buyer_id,
-                               params={"shop": shop_id, "item": item_name, "price": item["price"]})
+                    async with gs.lock:
+                        buyer.gold -= item["price"]
+                        buyer.backpack.append(item_name)
+                        _log_event(gs, player_id, "buy_item", target=buyer_id,
+                                   params={"shop": shop_id, "item": item_name, "price": item["price"]})
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await connection_mgr.broadcast(room_id, {
                         "type": "item_bought",
                         "payload": {"token_id": buyer_id, "item": item_name, "price": item["price"]},
                     })
                     await _broadcast_state(gs, room_id)
                 elif t == "end_turn":
-                    gs.turn_svc.end_turn()
-                    _log_event(gs, player_id, "end_turn")
+                    async with gs.lock:
+                        gs.cancel_turn_timer()
+                        gs.turn_svc.end_turn()
+                        _log_event(gs, player_id, "end_turn")
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                    # 启动下一回合的倒计时
+                    gs.start_turn_timer(callback=lambda: _broadcast_state(gs, room_id))
                     await _broadcast_state(gs, room_id)
                 elif t == "set_turn_order":
-                    gs.turn_svc.set_order(p.get("order", []))
-                    _log_event(gs, player_id, "set_turn_order", params=p)
+                    async with gs.lock:
+                        gs.turn_svc.set_order(p.get("order", []))
+                        _log_event(gs, player_id, "set_turn_order", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "shuffle_turn_order":
-                    gs.turn_svc.shuffle_order(p.get("order"))
-                    _log_event(gs, player_id, "shuffle_turn_order", params=p)
+                    async with gs.lock:
+                        gs.turn_svc.shuffle_order(p.get("order"))
+                        _log_event(gs, player_id, "shuffle_turn_order", params=p)
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "start_game":
-                    gs.turn_svc.start()
-                    _log_event(gs, player_id, "start_game")
+                    async with gs.lock:
+                        gs.turn_svc.start()
+                        _log_event(gs, player_id, "start_game")
+                        if gs.snapshot_storage:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                    gs.start_turn_timer(callback=lambda: _broadcast_state(gs, room_id))
                     await _broadcast_state(gs, room_id)
+                elif t == "get_ranking":
+                    # Phase 2: 查询当前排名
+                    ranking = gs.turn_svc.compute_final_ranking()
+                    await connection_mgr.send_to_player(room_id, player_id, {
+                        "type": "ranking",
+                        "payload": {
+                            "ranking": ranking,
+                            "elimination_order": gs.room.elimination_order,
+                        },
+                    })
                 else:
                     await connection_mgr.send_to_player(room_id, player_id, {
                         "type": "error", "payload": {"message": f"unknown type: {t}"}
@@ -634,9 +788,11 @@ async def _send_state_to_player(gs: RoomGameState, room_id: str, player_id: str)
     """
     is_admin = connection_mgr.is_admin(room_id, player_id)
     if is_admin:
+        payload = gs.room.model_dump()
+        payload["turn_deadline"] = gs.turn_deadline
         await connection_mgr.send_to_player(room_id, player_id, {
             "type": "state_sync",
-            "payload": gs.room.model_dump(),
+            "payload": payload,
             "is_admin": True,
         })
         return
@@ -648,6 +804,7 @@ async def _send_state_to_player(gs: RoomGameState, room_id: str, player_id: str)
     token = gs.room.tokens.get(tid) if tid else None
 
     base = gs.room.model_dump()
+    base["turn_deadline"] = gs.turn_deadline  # Phase 2: 回合倒计时
 
     if not token or not token.position:
         # 未落子：看全图静态地形，但隐藏所有动态 token 细节（只留自己的）

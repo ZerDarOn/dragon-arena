@@ -48,6 +48,9 @@ export class WSClient {
   private closedByUser = false
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  // Phase 4: 断线期间待发消息队列
+  private outbox: string[] = []
+  private static readonly MAX_OUTBOX = 50  // 防止无限堆积
 
   connect(roomId: string, token: string) {
     this.roomId = roomId
@@ -69,6 +72,8 @@ export class WSClient {
     ws.onopen = () => {
       this.reconnectAttempt = 0
       this._setStatus('open')
+      // Phase 4: 重连后 flush 待发消息队列
+      this._flushOutbox()
     }
     ws.onclose = () => {
       if (this.closedByUser) {
@@ -86,7 +91,33 @@ export class WSClient {
     }
   }
 
-  send(msg: ClientMessage) { this.ws?.send(JSON.stringify(msg)) }
+  send(msg: ClientMessage) {
+    const data = JSON.stringify(msg)
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(data)
+    } else {
+      // Phase 4: 断线期间入队，重连后自动 flush
+      if (this.outbox.length < WSClient.MAX_OUTBOX) {
+        this.outbox.push(data)
+      }
+    }
+  }
+
+  private _flushOutbox() {
+    if (this.outbox.length === 0) return
+    const pending = this.outbox
+    this.outbox = []
+    for (const data of pending) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(data)
+      } else {
+        // 又断了，放回队列
+        this.outbox.push(data)
+        break
+      }
+    }
+  }
+
   onMessage(l: (msg: ServerMessage) => void) { this.listeners.push(l) }
   onStatus(l: (status: ConnectionStatus) => void) { this.statusListeners.push(l) }
   private _setStatus(s: ConnectionStatus) { this.statusListeners.forEach((l) => l(s)) }
@@ -94,6 +125,7 @@ export class WSClient {
   close() {
     this.closedByUser = true
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null }
+    this.outbox = []  // 清空队列
     this.ws?.close()
     this.ws = null
   }

@@ -41,7 +41,7 @@
 
         <!-- 基础属性 -->
         <section class="block">
-          <h5>基础属性 <span class="cp-hint">(创造点上限 30，已用 {{ usedCP }}，剩余 {{ 30 - usedCP }})</span></h5>
+          <h5>基础属性 <span class="cp-hint" :class="{ 'cp-over': usedCP > 30 }">(创造点上限 30，已用 {{ usedCP }}，剩余 {{ 30 - usedCP }})</span></h5>
           <div class="grid-nums">
             <label>生命<input type="number" v-model.number="editing.hp_base" /></label>
             <label>护甲<input type="number" v-model.number="editing.armor_base" /></label>
@@ -242,6 +242,11 @@ async function onSave() {
   error.value = ''; saved.value = false
   const e = editing.value
   if (!e.name.trim()) { error.value = '请填写角色名称'; return }
+  // Phase 4: 创造点硬校验
+  if (usedCP.value > 30) {
+    error.value = `创造点超限！已用 ${usedCP.value}，上限 30，请减少 ${usedCP.value - 30} 点`
+    return
+  }
 
   // Pad arrays to expected sizes
   const equipment = [...e.equipment_slots]
@@ -325,12 +330,12 @@ async function onAvatarUpload(e: Event) {
   try {
     const r = await fetch(`http://${window.location.hostname}:8000/api/upload/avatar`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
+      headers: { Authorization: `Bearer ${localStorage.getItem('dragon_arena_token') || ''}` },
       body: form,
     })
     if (!r.ok) throw new Error('上传失败')
     const data = await r.json()
-    editing.value.avatar_url = data.url
+    editing.value.avatar_url = `http://${window.location.hostname}:8000${data.url}`
   } catch (err) {
     error.value = '头像上传失败: ' + (err as Error).message
   } finally {
@@ -361,6 +366,7 @@ onMounted(load)
 .block h5 { margin: 0 0 8px; font-size: 13px; color: #0f3460;
   border-bottom: 1px dashed #ccc; padding-bottom: 4px; }
 .cp-hint { font-size: 11px; color: #888; font-weight: normal; }
+.cp-over { color: #c00 !important; font-weight: bold; }
 .avatar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .avatar-preview { width: 40px; height: 40px; border-radius: 50%; background: #0f3460;
   color: #fff; display: flex; align-items: center; justify-content: center;

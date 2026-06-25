@@ -168,12 +168,12 @@ async function onAvatarUpload(e: Event) {
   try {
     const r = await fetch(`http://${window.location.hostname}:8000/api/upload/avatar`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
+      headers: { Authorization: `Bearer ${localStorage.getItem('dragon_arena_token') || ''}` },
       body: form,
     })
     if (!r.ok) throw new Error('上传失败')
     const data = await r.json()
-    actorForm.value.avatar_url = data.url
+    actorForm.value.avatar_url = `http://${window.location.hostname}:8000${data.url}`
   } catch (err) {
     alert('头像上传失败: ' + (err as Error).message)
   } finally {

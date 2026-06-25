@@ -132,12 +132,3 @@ class TokenService:
         if not token:
             return
         token.states = [s for s in token.states if s.id != state_id]
-
-    def tick_states(self) -> None:
-        for token in self.room.tokens.values():
-            kept = []
-            for s in token.states:
-                s.ttl -= 1
-                if s.ttl > 0:
-                    kept.append(s)
-            token.states = kept

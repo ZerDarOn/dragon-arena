@@ -97,6 +97,8 @@ const canvasStyle = computed(() => ({
   transformOrigin: '0 0',
   position: 'absolute' as const,
   left: '0', top: '0',
+  width: `${props.room.config.map_width * CELL}px`,
+  height: `${props.room.config.map_height * CELL}px`,
 }))
 
 // --- 状态 ---
@@ -304,8 +306,13 @@ function draw() {
   const cv = canvasRef.value; if (!cv) return
   const ctx = cv.getContext('2d')!
   const cfg = props.room.config
-  cv.width = cfg.map_width * CELL; cv.height = cfg.map_height * CELL
-  ctx.clearRect(0, 0, cv.width, cv.height)
+  const dpr = window.devicePixelRatio || 1
+  const cssW = cfg.map_width * CELL
+  const cssH = cfg.map_height * CELL
+  cv.width = cssW * dpr; cv.height = cssH * dpr
+  cv.style.width = `${cssW}px`; cv.style.height = `${cssH}px`
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, cssW, cssH)
   // 底图（按 roomId 缓存 Image 对象）
   if (props.bgImage) {
     const img = getBgImg(props.bgImage)
@@ -420,6 +427,32 @@ function draw() {
         const hpRatio = Math.max(0, t.hp / Math.max(1, t.max_hp))
         ctx.fillStyle = hpRatio > 0.5 ? '#3a7' : (hpRatio > 0.25 ? '#fa0' : '#c33')
         ctx.fillRect(t.position.x*CELL+2, t.position.y*CELL + CELL*tkSize - 5, barW * hpRatio, 3)
+      }
+      // Phase 2: 状态图标（token 右上角小圆点）
+      if (!isDead && t.states && t.states.length > 0) {
+        const badgeR = 5
+        const startX = t.position.x * CELL + CELL * tkSize - badgeR - 2
+        const startY = t.position.y * CELL + badgeR + 2
+        const maxBadges = Math.min(t.states.length, 4) // 最多画 4 个，避免溢出
+        for (let si = 0; si < maxBadges; si++) {
+          const s = t.states[si]
+          const bx = startX - si * (badgeR * 2 + 1)
+          // 状态名 -> 颜色 + 首字
+          const colorMap: Record<string, string> = {
+            '点燃': '#e80', '中毒': '#a0f', '流血': '#c00',
+            '撕裂': '#d40', '隐身': '#0aa', '护甲降低': '#666',
+            '定身': '#48f', '沉默': '#f48', '毒圈': '#840',
+          }
+          const color = colorMap[s.name] || '#888'
+          const label = s.name.charAt(0)
+          ctx.fillStyle = color
+          ctx.beginPath(); ctx.arc(bx, startY, badgeR, 0, Math.PI * 2); ctx.fill()
+          ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1; ctx.stroke()
+          ctx.fillStyle = '#fff'
+          ctx.font = `bold ${badgeR + 3}px sans-serif`
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+          ctx.fillText(label, bx, startY + 0.5)
+        }
       }
     }
   }
