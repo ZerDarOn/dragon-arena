@@ -241,6 +241,35 @@
       </div>
     </div>
 
+    <!-- 内容库（所有人只读）：事件/陷阱/怪物/奇遇/NPC -->
+    <div v-if="active === 'library'" class="panel">
+      <div class="lib-cats">
+        <button v-for="c in libCats" :key="c.key"
+                :class="{ active: libCategory === c.key }" @click="libCategory = c.key">{{ c.label }}</button>
+      </div>
+      <div class="add-form">
+        <input v-model="libFilter" placeholder="搜索内容库..." class="search-input" />
+      </div>
+      <div v-if="libLoading" class="loading">加载中...</div>
+      <ul v-else class="sheet-list">
+        <li v-for="e in filteredLibrary" :key="e.id" @click="toggleLib(e.id)"
+            :class="{ expanded: expandedLib === e.id }">
+          <div class="row-head">
+            <strong>{{ e.name }}</strong>
+            <span v-if="e.tier" class="badge">{{ e.tier }}</span>
+            <span class="meta">{{ e.effect_text }}</span>
+          </div>
+          <div v-if="expandedLib === e.id" class="detail">
+            <div class="kv">
+              <span v-for="(v, k) in e.fields" :key="k"><b>{{ k }}：</b>{{ v || '—' }}</span>
+            </div>
+            <p v-if="e.note" class="lib-note">备注：{{ e.note }}</p>
+          </div>
+        </li>
+        <li v-if="!filteredLibrary.length" class="empty">无匹配条目</li>
+      </ul>
+    </div>
+
     <!-- 光源/物件模板 -->
     <div v-if="active === 'objects'" class="panel">
       <div class="add-form" v-if="canManageLibrary">
@@ -268,8 +297,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { listAllCharacters, listMyCharacters, uploadAvatar } from '../../api/rest'
-import type { CharacterSheet, Actor, ActorCreate, Item, ItemCreate } from '../../api/types'
+import { listAllCharacters, listMyCharacters, listLibrary, uploadAvatar } from '../../api/rest'
+import type { CharacterSheet, Actor, ActorCreate, Item, ItemCreate, LibraryEntry } from '../../api/types'
 import { monsters, equips, objects } from '../../stores/resources'
 import { useActorStore } from '../../stores/actors'
 import { useItemStore } from '../../stores/items'
@@ -290,6 +319,7 @@ const allTabs = [
   { key: 'sheets', label: '角色卡库' },
   { key: 'actors', label: '角色模板' },
   { key: 'items', label: '道具库' },
+  { key: 'library', label: '内容库' },
   { key: 'monsters', label: '怪物模板' },
   { key: 'equip', label: '装备池' },
   { key: 'objects', label: '物件' },
@@ -498,11 +528,41 @@ async function deleteItem(id: string) {
   await itemStore.remove(id)
 }
 
+// ---- 内容库（事件/陷阱/怪物/奇遇/NPC，所有人只读参考）----
+const libCats = [
+  { key: 'event', label: '事件' },
+  { key: 'trap', label: '陷阱' },
+  { key: 'monster', label: '怪物' },
+  { key: 'adventure', label: '奇遇' },
+  { key: 'npc', label: 'NPC' },
+]
+const libEntries = ref<LibraryEntry[]>([])
+const libCategory = ref('event')
+const libFilter = ref('')
+const libLoading = ref(false)
+const expandedLib = ref<string | null>(null)
+async function loadLibrary() {
+  libLoading.value = true
+  try { libEntries.value = await listLibrary() }
+  catch (e) { console.warn(e) }
+  finally { libLoading.value = false }
+}
+function toggleLib(id: string) {
+  expandedLib.value = expandedLib.value === id ? null : id
+}
+const filteredLibrary = computed(() => {
+  const q = libFilter.value.trim().toLowerCase()
+  return libEntries.value.filter((e) =>
+    e.category === libCategory.value &&
+    (!q || e.name.toLowerCase().includes(q) || e.effect_text.toLowerCase().includes(q)))
+})
+
 // 角色卡保存/新建/删除后（CharacterSheetEditor 派发）刷新「我的角色卡」列表
 function onSheetsChanged() { loadMySheets() }
 
 onMounted(() => {
   loadMySheets()
+  loadLibrary()
   if (canViewAllSheets.value) loadSheets()  // /admin/characters 仅管理员；玩家跳过避免 401
   actorStore.load()
   itemStore.load()
@@ -572,6 +632,14 @@ onUnmounted(() => window.removeEventListener('sheets-changed', onSheetsChanged))
 .actor-meta { font-size: 11px; color: #666; }
 .actor-actions { display: flex; gap: 2px; }
 .drag-hint { color: #ccc; font-size: 12px; margin-left: auto; cursor: grab; }
+/* 内容库 */
+.lib-cats { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.lib-cats button { padding: 3px 10px; border: 1px solid #ccc; background: #fff;
+  border-radius: 12px; cursor: pointer; font-size: 12px; }
+.lib-cats button.active { background: #0f3460; color: #fff; border-color: #0f3460; }
+.lib-list .meta { display: block; margin-top: 2px; white-space: normal; }
+.kv b { color: #666; font-weight: 600; }
+.lib-note { margin: 4px 0 0; font-size: 11px; color: #888; }
 .actor-card.dragging { opacity: 0.6; background: #e8f0ff; box-shadow: 0 0 0 2px #0f3460; }
 .mini-btn { padding: 2px 6px; border: 1px solid #ccc; background: #fff;
   border-radius: 2px; cursor: pointer; font-size: 11px; }

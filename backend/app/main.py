@@ -16,6 +16,8 @@ from app.deps import user_storage, get_current_user, require_admin, get_current_
 from app.ws.handler import handle_ws_connection
 from app.schemas.actor import ActorCreate, ActorUpdate
 from app.schemas.item import ItemCreate, ItemUpdate
+from app.schemas.library import LibraryEntry
+from app.services.library_service import library_service
 
 app = FastAPI(title="Dragon Arena")
 app.add_middleware(
@@ -292,6 +294,14 @@ async def delete_item(item_id: str):
     if not user_storage.delete_item(item_id):
         raise HTTPException(404, "item not found")
     return {"ok": True}
+
+
+# ---- 内容库（事件/陷阱/怪物/奇遇/NPC）只读参考 ----
+
+@app.get("/api/library", response_model=List[LibraryEntry], dependencies=[Depends(get_current_user)])
+async def list_library(category: Optional[str] = None):
+    """所有登录用户可读。category 可选：event|trap|monster|adventure|npc。"""
+    return library_service.list(category)
 
 
 # ---- 头像上传 ----

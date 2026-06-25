@@ -191,6 +191,17 @@ export interface Item {
   created_at: number; updated_at: number
 }
 
+// 内容库（事件/陷阱/怪物/奇遇/NPC）只读参考条目
+export interface LibraryEntry {
+  id: string
+  category: 'event' | 'trap' | 'monster' | 'adventure' | 'npc'
+  name: string
+  tier: string
+  effect_text: string
+  note: string
+  fields: Record<string, string>
+}
+
 export interface ItemCreate {
   name: string
   category?: Item['category']

@@ -1,5 +1,5 @@
 import { useAuthStore } from '../stores/auth'
-import type { LoginResponse, UserPublic, CharacterSheet } from './types'
+import type { LoginResponse, UserPublic, CharacterSheet, LibraryEntry } from './types'
 
 // 跟 api/ws.ts 保持一致：跟着当前访问的 host 走，而不是硬编码 localhost。
 // 否则局域网内其他设备访问前端时，WS 能连上但所有 REST 请求都会打到它们自己的本机，永远连不上。
@@ -33,6 +33,13 @@ export async function fetchMe(): Promise<UserPublic> {
  * 注意：multipart 不能带 Content-Type（让浏览器自动生成 boundary），所以只取 Authorization，
  * 不用 authHeaders()。此前这段逻辑在 ResourceManager / MiniResPanel 里各复制了一份并硬编码了 URL。
  */
+export async function listLibrary(category?: string): Promise<LibraryEntry[]> {
+  const q = category ? `?category=${encodeURIComponent(category)}` : ''
+  const r = await fetch(`${API}/api/library${q}`, { headers: authHeaders() })
+  if (!r.ok) throw new Error('加载内容库失败')
+  return r.json()
+}
+
 export async function uploadAvatar(file: File): Promise<string> {
   const auth = useAuthStore()
   const form = new FormData()
