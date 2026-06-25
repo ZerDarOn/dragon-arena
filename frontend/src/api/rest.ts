@@ -79,6 +79,19 @@ export async function drawRollTable(id: string): Promise<DrawResult> {
   return r.json()
 }
 
+/** 批量导入道具（管理员），按 name upsert。entries 字段同导出/ItemCreate。 */
+export async function importItems(entries: any[], mode: 'upsert' | 'replace' = 'upsert'): Promise<any> {
+  const r = await fetch(`${API}/api/items/import`, {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({ entries, mode }),
+  })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error(err.detail || '导入失败')
+  }
+  return r.json()
+}
+
 export async function uploadAvatar(file: File): Promise<string> {
   const auth = useAuthStore()
   const form = new FormData()

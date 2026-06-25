@@ -443,6 +443,37 @@ class UserStorage:
             cur = conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
             return cur.rowcount > 0
 
+    def import_items(self, entries, mode: str = "upsert") -> dict:
+        """批量导入道具。以 name 为键 upsert（货架按 name 引用道具）；replace 先清空。
+        entries 为 dict 列表（与导出/ItemCreate 同字段，id 由系统管）。"""
+        import uuid
+        now = int(time.time() * 1000)
+        added = updated = 0
+        with self._conn() as conn, _LOCK:
+            if mode == "replace":
+                conn.execute("DELETE FROM items")
+            for e in entries:
+                name = (e.get("name") or "").strip()
+                if not name:
+                    continue
+                cat = e.get("category", "misc")
+                desc = e.get("description", "")
+                eff = e.get("effect_text", "")
+                icon = e.get("icon_url")
+                price = int(e.get("price", 0) or 0)
+                row = conn.execute("SELECT id FROM items WHERE name = ?", (name,)).fetchone()
+                if row:
+                    conn.execute(
+                        "UPDATE items SET category=?, description=?, effect_text=?, icon_url=?, price=?, updated_at=? WHERE id=?",
+                        (cat, desc, eff, icon, price, now, row["id"]))
+                    updated += 1
+                else:
+                    conn.execute(
+                        "INSERT INTO items (id,name,category,description,effect_text,icon_url,price,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (str(uuid.uuid4())[:8], name, cat, desc, eff, icon, price, now, now))
+                    added += 1
+        return {"mode": mode, "added": added, "updated": updated}
+
     @staticmethod
     def _row_to_item(row) -> dict:
         return {

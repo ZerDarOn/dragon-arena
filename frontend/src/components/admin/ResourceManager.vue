@@ -196,6 +196,12 @@
       <div class="add-form">
         <button v-if="canManageLibrary" @click="newItem" class="add-btn">+ 新建道具</button>
         <input v-model="itemFilter" placeholder="搜索..." class="search-input" />
+        <button class="lib-io" @click="exportItems" :disabled="!itemStore.items.length"
+                title="导出全部道具为 JSON（即导入用的规范格式）">⬇ 导出</button>
+        <label v-if="canManageLibrary" class="lib-io import" title="导入道具 JSON（按 name 合并）">
+          {{ itemImporting ? '导入中…' : '⬆ 导入' }}
+          <input type="file" accept="application/json,.json" @change="onImportItems" hidden />
+        </label>
       </div>
       <div v-if="itemStore.items.length === 0" class="empty">暂无道具<br/><small v-if="canManageLibrary">新建后可以挂在 NPC 商店货架上出售</small></div>
       <ul class="actor-list">
@@ -368,7 +374,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { listAllCharacters, listMyCharacters, listLibrary, importLibrary, uploadAvatar,
+import { listAllCharacters, listMyCharacters, listLibrary, importLibrary, importItems, uploadAvatar,
   listRollTables, createRollTable, updateRollTable, deleteRollTable, drawRollTable } from '../../api/rest'
 import type { CharacterSheet, Actor, ActorCreate, Item, ItemCreate, LibraryEntry, RollTable, DrawResult } from '../../api/types'
 import { pushToast } from '../../composables/useToast'
@@ -632,15 +638,39 @@ const filteredLibrary = computed(() => {
     (!q || e.name.toLowerCase().includes(q) || e.effect_text.toLowerCase().includes(q)))
 })
 
-// 导出：把当前内容库存成 JSON 文件（即"规范格式"，AI 照此整理 Excel 即可一键导入）
-function exportLibrary() {
-  const blob = new Blob([JSON.stringify(libEntries.value, null, 2)], { type: 'application/json' })
+// 导出：把数据存成 JSON 文件（即"规范格式"，AI 照此整理 Excel 即可一键导入）
+function downloadJson(data: any, prefix: string) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `library_export_${new Date().toISOString().slice(0, 10)}.json`
+  a.download = `${prefix}_${new Date().toISOString().slice(0, 10)}.json`
   a.click()
   URL.revokeObjectURL(url)
+}
+function exportLibrary() { downloadJson(libEntries.value, 'library_export') }
+
+// 道具库导出/导入（管理员），与内容库同一套思路，按 name upsert
+const itemImporting = ref(false)
+function exportItems() { downloadJson(itemStore.items, 'items_export') }
+async function onImportItems(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  itemImporting.value = true
+  try {
+    const data = JSON.parse(await file.text())
+    const entries = Array.isArray(data) ? data : data.entries
+    if (!Array.isArray(entries)) throw new Error('文件应是道具数组')
+    const res = await importItems(entries, 'upsert')
+    await itemStore.load(true)
+    pushToast(`导入成功：新增 ${res.added} · 更新 ${res.updated}`, 'info')
+  } catch (err) {
+    pushToast('导入失败：' + (err as Error).message, 'error')
+  } finally {
+    itemImporting.value = false
+    input.value = ''
+  }
 }
 // 导入：上传 JSON 数组（与导出同格式，id 可省略），按 id upsert 并持久化
 const libImporting = ref(false)

@@ -39,3 +39,24 @@
 - "名称"列 → `name`；"等级/稀有度/类型"列 → `tier`；"效果/描述/特殊能力"列 → `effect_text`；"备注"→`note`。
 - 其余所有列原样塞进 `fields`（键用原表头），不丢信息。
 - `id` 留空让系统生成，或用稳定规则（如 `monster_<序号>`）以便后续 upsert 更新同一条。
+
+---
+
+## 道具库导入（同一套思路）
+
+资源库 →「道具库」Tab →「⬆ 导入」；或 `POST /api/items/import`（管理员，body `{entries, mode}`）。
+**按 `name` upsert**（货架按 name 引用道具，所以 name 是键，重名即更新）。
+
+```jsonc
+{
+  "name": "回血药水",        // 必填，作为去重键
+  "category": "consumable", // weapon | armor | consumable | skill | misc
+  "price": 40,              // 0 = 不可购买（仅战场获得/团主发放）
+  "description": "恢复 20 HP",
+  "effect_text": "团主参考，系统不解析",
+  "icon_url": ""            // 可选
+}
+```
+
+整个文件是道具对象数组。AI 读兑换表 Excel：一行一个对象，名称列→`name`，价格列→`price`，
+品类→`category`，效果/描述→`effect_text`/`description`。

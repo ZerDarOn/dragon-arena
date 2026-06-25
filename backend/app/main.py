@@ -298,6 +298,20 @@ async def delete_item(item_id: str):
     return {"ok": True}
 
 
+class ItemImportRequest(BaseModel):
+    entries: List[dict]
+    mode: Optional[str] = "upsert"   # upsert(按name合并) | replace
+
+
+@app.post("/api/items/import", dependencies=[Depends(require_admin)])
+async def import_items(req: ItemImportRequest):
+    """批量导入道具（管理员）。entries 与导出/ItemCreate 同字段，按 name upsert。"""
+    try:
+        return user_storage.import_items(req.entries, mode=req.mode or "upsert")
+    except Exception as e:
+        raise HTTPException(400, f"导入失败：{e}")
+
+
 # ---- 内容库（事件/陷阱/怪物/奇遇/NPC）只读参考 ----
 
 @app.get("/api/library", response_model=List[LibraryEntry], dependencies=[Depends(get_current_user)])
