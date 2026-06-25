@@ -30,7 +30,7 @@
         <span>📚 资源库</span>
         <button class="res-close" @click="showResPanel = false">×</button>
       </div>
-      <div class="res-panel-body"><ResourceManager @edit-sheet="onSheetEdit" @create-sheet="onSheetCreate" /></div>
+      <div class="res-panel-body"><ResourceManager :in-battle="inBattle" @edit-sheet="onSheetEdit" @create-sheet="onSheetCreate" /></div>
     </aside>
     <button v-if="inBattle && !showResPanel" class="res-toggle" @click="showResPanel = true">📚</button>
 
@@ -176,7 +176,7 @@
 
     <!-- 资源库弹窗（待机态）—— 所有人可读，写操作按权限锁（见 ResourceManager / usePermission） -->
     <Modal v-if="showRes" title="资源库" @close="showRes = false">
-      <ResourceManager @edit-sheet="onSheetEdit" @create-sheet="onSheetCreate" />
+      <ResourceManager :in-battle="inBattle" @edit-sheet="onSheetEdit" @create-sheet="onSheetCreate" />
     </Modal>
 
     <Modal v-if="showSheetPicker" title="选择角色卡落子" @close="showSheetPicker = false">

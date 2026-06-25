@@ -386,6 +386,7 @@ const emit = defineEmits<{
   (e: 'edit-sheet', sheet: CharacterSheet): void
   (e: 'create-sheet'): void
 }>()
+const props = defineProps<{ inBattle?: boolean }>()
 
 const allTabs = [
   { key: 'mysheets', label: '我的角色卡' },
@@ -670,6 +671,13 @@ async function loadRollTables() {
   try { rollTables.value = await listRollTables() } catch (e) { console.warn(e) }
 }
 async function doDraw(t: RollTable) {
+  // 管理员在对局内：服务端抽取并广播到战斗频道（全房间可见）
+  if (props.inBattle && canManageLibrary.value) {
+    window.dispatchEvent(new CustomEvent('ws-send', { detail: { type: 'draw_table', payload: { table_id: t.id } } }))
+    pushToast(`🎲 已抽取「${t.name}」，结果广播到战斗频道`, 'info')
+    return
+  }
+  // 其余（待机态预览 / 非管理员）：本地 REST 抽取，只自己看
   try {
     lastDraw.value = await drawRollTable(t.id)
     pushToast(`🎲 ${lastDraw.value.table_name}：${lastDraw.value.text}`, 'info')

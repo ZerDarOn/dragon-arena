@@ -137,3 +137,25 @@ def test_sprint_moves_and_costs_only_sprint_ap(auth_client, auth_setup, ws_room)
         moved = msg2["payload"]["tokens"]["tok_sp"]
         assert moved["position"] == {"x": 5, "y": 1}, "疾跑应真正移动到路径终点"
         assert moved["ap"] == ap0 - sprint_cost, "疾跑只该扣一次 sprint_ap_cost"
+
+
+def test_draw_table_broadcasts_system_chat(auth_client, auth_setup, ws_room):
+    """团主对局内抽取 → 结果作为 battle 系统消息广播。"""
+    token = auth_setup["admin_token"]
+    with auth_client.websocket_connect(f"/ws/{ws_room}?token={token}") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "draw_table", "payload": {"table_id": "rt_airdrop"}})
+        msg = ws.receive_json()
+        assert msg["type"] == "chat"
+        assert msg["payload"]["content_type"] == "system"
+        assert msg["payload"]["channel"] == "battle"
+        assert "空投道具" in msg["payload"]["text"]
+
+
+def test_draw_table_non_admin_rejected(client, auth_setup, ws_room):
+    user_token = auth_setup["user_token"]
+    with client.websocket_connect(f"/ws/{ws_room}?token={user_token}") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "draw_table", "payload": {"table_id": "rt_airdrop"}})
+        msg = ws.receive_json()
+        assert msg["type"] == "error"

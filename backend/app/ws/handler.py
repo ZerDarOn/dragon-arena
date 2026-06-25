@@ -1,5 +1,6 @@
 import asyncio
 import time
+import uuid
 from typing import Dict
 from fastapi import WebSocket, WebSocketDisconnect
 from app.services.room_service import RoomService
@@ -15,6 +16,8 @@ from app.services.combat_engine import CombatEngine, CombatContext, create_attac
 from app.schemas.map import GameMap
 from app.schemas.event import GameEvent
 from app.schemas.room import Player, Token
+from app.schemas.chat import ChatMessage
+from app.services.rolltable_service import rolltable_service
 from app.deps import user_storage
 from .connection_manager import ConnectionManager
 
@@ -626,6 +629,29 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             if gs.snapshot_storage:
                                 gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                         await _broadcast_state(gs, room_id)
+                elif t == "draw_table":
+                    # 团主在对局内抽取 → 结果作为 battle 系统消息广播给全房间 + 进事件日志
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can draw tables"}
+                        })
+                        continue
+                    res = rolltable_service.draw(p.get("table_id"))
+                    if not res:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "抽取表不存在"}
+                        })
+                        continue
+                    draw_text = f"🎲【{res.table_name}】{res.text}"
+                    if res.entry and res.entry.get("effect_text"):
+                        draw_text += f" — {res.entry['effect_text']}"
+                    _log_event(gs, player_id, "draw_table", params=p, result=res.model_dump())
+                    msg = ChatMessage(
+                        id=str(uuid.uuid4()), sender_id=player_id, channel="battle",
+                        content_type="system", text=draw_text, recipients=None,
+                        timestamp=int(time.time() * 1000),
+                    )
+                    await connection_mgr.broadcast(room_id, {"type": "chat", "payload": msg.model_dump()})
                 elif t == "set_poison_circle":
                     if not is_admin:
                         await connection_mgr.send_to_player(room_id, player_id, {
