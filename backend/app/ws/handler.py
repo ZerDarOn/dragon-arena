@@ -213,14 +213,49 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                         sides_legacy = p.get("sides", 20)
                         mod_legacy = p.get("modifier", 0)
                         expr = f"1d{sides_legacy}{mod_legacy:+d}" if mod_legacy else f"1d{sides_legacy}"
+                    # 服务端权威摇骰：不再采信客户端提交的点数（防作弊）。前端拿到
+                    # 结果后只负责把这些点数用 3D 动画演出来。
                     r = roll_expression(expr,
                                         crit_success_threshold=gs.room.config.crit_success,
-                                        crit_fail_threshold=gs.room.config.crit_fail,
-                                        forced_values=p.get("rolls"))
+                                        crit_fail_threshold=gs.room.config.crit_fail)
+
+                    # 暗骰/明骰可见性控制（参考 FVTT whisper 机制）：
+                    # - public（默认）：全房间广播
+                    # - gm：只有 DM（admin）能看到真实结果，其他人只收到模糊提示
+                    # - self：只有掷骰者和 DM 能看到结果
+                    visibility = p.get("visibility", "public")
+                    dice_payload = {"actor": player_id, **r.model_dump(), "visibility": visibility}
+
+                    if visibility == "public":
+                        await connection_mgr.broadcast(room_id, {
+                            "type": "dice_result", "payload": dice_payload,
+                        })
+                    else:
+                        # gm / self：计算可见名单
+                        visible_ids = set()
+                        if visibility == "self":
+                            visible_ids.add(player_id)  # 掷骰者自己
+                        # 所有 admin（DM）都能看到暗骰结果
+                        visible_ids.update(connection_mgr.admins.get(room_id, set()))
+
+                        for vid in visible_ids:
+                            await connection_mgr.send_to_player(room_id, vid, {
+                                "type": "dice_result", "payload": dice_payload,
+                            })
+                        # 给不在线的玩家发一条模糊提示（不透露具体数字）
+                        obscured_payload = {
+                            "actor": player_id,
+                            "expression": expr,
+                            "visibility": visibility,
+                            "hidden": True,  # 前端据此显示"🎲 某人掷了暗骰"
+                        }
+                        for pid in connection_mgr.players_in_room(room_id):
+                            if pid not in visible_ids:
+                                await connection_mgr.send_to_player(room_id, pid, {
+                                    "type": "dice_result", "payload": obscured_payload,
+                                })
+
                     _log_event(gs, player_id, "dice", params=p, result=r.model_dump())
-                    await connection_mgr.broadcast(room_id, {
-                        "type": "dice_result", "payload": {"actor": player_id, **r.model_dump()},
-                    })
                 elif t == "move":
                     tid_m = p.get("token_id")
                     tok_m = gs.room.tokens.get(tid_m)

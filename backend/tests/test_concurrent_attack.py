@@ -47,9 +47,13 @@ def gs(temp_db):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_attack_hp_not_overwritten(gs):
-    """两个 attacker 同时打同一个 defender，HP 应该扣两次。"""
+async def test_concurrent_attack_hp_not_overwritten(gs, monkeypatch):
+    """两个 attacker 同时打同一个 defender，两次伤害都应生效（不被覆盖）。"""
     from app.services.combat_engine import CombatContext
+
+    # 固定骰子去掉随机性：D20 恒为 15 → 必命中（15≥近战DC8），近战伤害=base10+(15-8)=17/次。
+    # 否则低骰会 miss/0 伤，HP 偶尔停在 100，让这个测试 flaky（与并发逻辑无关的假阴性）。
+    monkeypatch.setattr("app.services.dice_service._rand_int", lambda a, b: 15)
 
     defender = gs.room.tokens["t3"]
     initial_hp = defender.hp
@@ -82,11 +86,8 @@ async def test_concurrent_attack_hp_not_overwritten(gs):
         attack("t2", "t3"),
     )
 
-    # 验证：HP 应该扣了两次（不是一次）
-    # 徒手攻击 base_damage=5, dice_expr="D20-8", armor=0
-    # 两次伤害至少 5+5=10，但 dice 随机，这里只验证 HP < 100
-    assert defender.hp < 100, f"并发攻击后 HP 应该减少，但仍是 {defender.hp}"
-    # 更严格：两次攻击都命中时，HP 至少减少 10（2 * base 5）
-    # 由于 dice 随机，我们验证 HP 不是 95（单次 5）—— 但 dice 可能 roll 到更高
-    # 最稳的断言：HP 不是 100，且快照存在
+    # 验证两次攻击都生效（不是只扣一次被覆盖）：近战 17/次 × 2 = 34 → 100 - 34 = 66。
+    # 若锁失效导致一次写覆盖另一次，HP 会是 83（只扣一次）。
+    assert defender.hp == 66, f"两次并发攻击应各扣 17、HP 应为 66，实际 {defender.hp}"
+    # 快照也应落盘
     assert gs.snapshot_storage.load(gs.room.id) is not None

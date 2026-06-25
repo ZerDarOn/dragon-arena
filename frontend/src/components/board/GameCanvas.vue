@@ -193,7 +193,7 @@ function onScaleDragStart(e: MouseEvent) {
   sizeDragStartY.value = e.clientY
   sizeDragStartVal.value = selectedToken.value?.size || 1
 }
-function onScaleDrag(e: MouseEvent) {
+function onScaleDrag(_e: MouseEvent) {
   if (!sizeDragging.value || !selectedToken.value) return
 }
 function onScaleDragEnd(e: MouseEvent) {
@@ -212,9 +212,9 @@ function doRadial(action: string) {
   } else if (action === 'move') {
     // 进入移动模式：直接准备拖拽，用户可直接拖动
     dragging.value = true
-    dragPath.value = [[selectedToken.value.position.x, selectedToken.value.position.y]]
+    dragPath.value = [[selectedToken.value.position!.x, selectedToken.value.position!.y]]
   } else if (action === 'attack' || action === 'item') {
-    emit('cell-click', { x: selectedToken.value.position.x, y: selectedToken.value.position.y, action })
+    emit('cell-click', { x: selectedToken.value.position!.x, y: selectedToken.value.position!.y, action })
   }
 }
 
@@ -669,14 +669,14 @@ function onDown(e: MouseEvent) {
     if (clicked.id === selectedTokenId.value) {
       showRadial.value = false
       dragging.value = true
-      dragPath.value = [[clicked.position.x, clicked.position.y]]
+      dragPath.value = [[clicked.position!.x, clicked.position!.y]]
       return
     }
     selectedTokenId.value = clicked.id
     emit('token-selected', clicked)
     showRadial.value = false
     dragging.value = true
-    dragPath.value = [[clicked.position.x, clicked.position.y]]
+    dragPath.value = [[clicked.position!.x, clicked.position!.y]]
     return
   }
 
@@ -766,10 +766,10 @@ function onMouseMove(e: MouseEvent) {
   // 有棋子被选中，但不是在棋子上拖的 → 拖拽转向
   if (clicked && last) {
     const [lx, ly] = last
-    if (lx !== clicked.position.x || ly !== clicked.position.y) {
+    if (lx !== clicked.position!.x || ly !== clicked.position!.y) {
       // 旋转模式：根据鼠标位置计算朝向
-      const dx = x - clicked.position.x
-      const dy = y - clicked.position.y
+      const dx = x - clicked.position!.x
+      const dy = y - clicked.position!.y
       if (dx !== 0 || dy !== 0) {
         const angle = Math.atan2(dy, dx) * (180 / Math.PI) + 90
         const facing = (Math.round(angle / 45) + 8) % 8
@@ -837,7 +837,9 @@ function paintCell(x: number, y: number) {
     return
   }
   // 普通地形
-  terrainPaintQueue.value.push({ x, y, type: brush })
+  if (brush) {
+    terrainPaintQueue.value.push({ x, y, type: brush })
+  }
 }
 
 function flushTerrainPaint() {
@@ -861,7 +863,7 @@ function flushTerrainPaint() {
 }
 
 // --- mouseup ---
-function onMouseUp() {
+function onMouseUp(e?: MouseEvent) {
   if (panning.value) { panning.value = false; return }
   if (measuring.value) {
     measuring.value = false

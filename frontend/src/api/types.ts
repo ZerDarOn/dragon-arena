@@ -131,6 +131,8 @@ export interface DiceResult {
   groups: DiceGroup[]
   value: number; modifier: number; total: number
   crit_success: boolean; crit_fail: boolean; sides: number
+  visibility?: 'public' | 'gm' | 'self'  // 暗骰可见性
+  hidden?: boolean                         // true=暗骰但你看不到结果（只有模糊提示）
 }
 
 // ---- Actor Library ----
