@@ -66,6 +66,11 @@ class TokenService:
             return MoveResult(success=False, reason="token is dead")
 
         original = (token.position["x"], token.position["y"])
+        # 客户端常把"起点格"也放进 path[0]（拖拽路径从棋子当前格开始）。丢掉它，只处理
+        # 真正的步进格，否则第一步"原地→原地"距离=0 会被判成非相邻而整条移动直接失败
+        # ——表现就是"点了/拖了但棋子不动"。
+        if path and tuple(path[0]) == original:
+            path = list(path)[1:]
         triggered = []
         ap_needed = 0
         cur = original

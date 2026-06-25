@@ -16,7 +16,6 @@
     <div v-if="showRadial" class="radial-menu" :style="radialMenuStyle" @mousedown.stop @click.stop>
       <button class="radial-btn move" @mousedown.stop @click.stop="doRadial('move')" title="移动">移动</button>
       <button class="radial-btn attack" @mousedown.stop @click.stop="doRadial('attack')" title="攻击">攻击</button>
-      <button class="radial-btn item" @mousedown.stop @click.stop="doRadial('item')" title="道具">道具</button>
       <button class="radial-btn info" @mousedown.stop @click.stop="doRadial('info')" title="详情">详情</button>
       <button class="radial-btn dismiss" @mousedown.stop @click.stop="doRadial('dismiss')" title="取消">✕</button>
     </div>
@@ -211,11 +210,8 @@ function doRadial(action: string) {
   if (!selectedToken.value) return
   if (action === 'info') {
     emit('token-dblclick', selectedToken.value)
-  } else if (action === 'move') {
-    // 进入移动模式：直接准备拖拽，用户可直接拖动
-    dragging.value = true
-    dragPath.value = [[selectedToken.value.position!.x, selectedToken.value.position!.y]]
-  } else if (action === 'attack' || action === 'item') {
+  } else if (action === 'move' || action === 'attack') {
+    // move：棋子已选中，click-to-move 已就绪，提示点目标格即可；attack：进入攻击模式
     emit('cell-click', { x: selectedToken.value.position!.x, y: selectedToken.value.position!.y, action })
   }
 }
@@ -994,8 +990,25 @@ function onMouseUp(e?: MouseEvent) {
     draw(); return
   }
 
-  // 空白处单击取消选中（路径为空 = 没有实际拖动）
+  // 空白处单击（路径为空 = 没有实际拖动）
   if (dragging.value && dragPath.value.length === 0 && dragStartForCancel.value) {
+    const [cx, cy] = dragStartForCancel.value
+    const sel = selectedTokenId.value ? props.room.tokens[selectedTokenId.value] : null
+    const controllable = !!sel && (props.isAdmin || sel.id === props.selfTokenId)
+    // 选中可控棋子时点击空格 → 点击移动（和拖拽移动等效，更直觉）
+    if (sel?.position && controllable && (cx !== sel.position.x || cy !== sel.position.y)) {
+      const steps = manhattanPath(sel.position.x, sel.position.y, cx, cy)
+      if (steps.length) {
+        emit('path-committed', steps)
+        const lastS = steps[steps.length - 1]
+        const prevS = steps[steps.length - 2] || [sel.position.x, sel.position.y]
+        emit('token-rotate', sel.id, facingFromDelta(lastS[0] - prevS[0], lastS[1] - prevS[1]))
+      }
+      dragging.value = false
+      dragStartForCancel.value = null
+      draw(); return
+    }
+    // 否则：点空地取消选中
     selectedTokenId.value = null
     showRadial.value = false
     dragging.value = false

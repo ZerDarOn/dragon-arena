@@ -755,6 +755,9 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             "type": "error", "payload": {"message": "cannot control token"}
                         })
                         continue
+                    # 去掉客户端混进来的起点格，距离校验才准（与 move 一致）
+                    if token.position and path and tuple(path[0]) == (token.position["x"], token.position["y"]):
+                        path = path[1:]
                     is_free = getattr(gs.room.config, 'free_mode', False)
                     if token.ap < gs.room.config.sprint_ap_cost and not is_free:
                         await connection_mgr.send_to_player(room_id, player_id, {

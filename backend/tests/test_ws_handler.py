@@ -159,3 +159,16 @@ def test_draw_table_non_admin_rejected(client, auth_setup, ws_room):
         ws.send_json({"type": "draw_table", "payload": {"table_id": "rt_airdrop"}})
         msg = ws.receive_json()
         assert msg["type"] == "error"
+
+
+def test_move_with_leading_start_cell_actually_moves(auth_client, auth_setup, ws_room):
+    """回归：前端拖拽路径把起点格放在 path[0]；后端要丢掉它，否则整条移动失败、棋子不动。"""
+    token = auth_setup["admin_token"]
+    with auth_client.websocket_connect(f"/ws/{ws_room}?token={token}") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "place_token", "payload": {"token_id": "tok_mv", "x": 1, "y": 1}})
+        ws.receive_json()
+        # 路径含起点 (1,1)，目标 (3,1)
+        ws.send_json({"type": "move", "payload": {"token_id": "tok_mv", "path": [[1, 1], [2, 1], [3, 1]]}})
+        msg = ws.receive_json()
+        assert msg["payload"]["tokens"]["tok_mv"]["position"] == {"x": 3, "y": 1}, "含起点的路径也应正常移动"

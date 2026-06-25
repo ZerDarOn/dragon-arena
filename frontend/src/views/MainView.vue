@@ -692,13 +692,8 @@ function onCellClick(cell: { x: number; y: number; action?: string }) {
       return
     }
     if (cell.action === 'move') {
-      // 移动由拖拽处理，这里只是激活选择工具
-      return
-    }
-    if (cell.action === 'item') {
-      // 还没有独立的道具面板；目前唯一能用道具的地方是右侧战斗面板的下拉框，
-      // 之前这里点了什么反应都没有，至少先引导过去，而不是悄无声息地什么都不做。
-      pushToast('请在右侧「战斗」面板中选择并使用道具', 'info')
+      // click-to-move：棋子已选中，点目标格即可移动
+      pushToast('点击目标格即可移动该棋子', 'info')
       return
     }
   }
