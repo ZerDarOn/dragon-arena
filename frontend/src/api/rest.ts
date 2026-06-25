@@ -40,6 +40,19 @@ export async function listLibrary(category?: string): Promise<LibraryEntry[]> {
   return r.json()
 }
 
+/** 导入内容库（管理员）。entries 为 LibraryEntry 数组（与导出格式一致，id 可省略）。 */
+export async function importLibrary(entries: any[], mode: 'upsert' | 'replace' = 'upsert'): Promise<any> {
+  const r = await fetch(`${API}/api/library/import`, {
+    method: 'POST', headers: authHeaders(),
+    body: JSON.stringify({ entries, mode }),
+  })
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error(err.detail || '导入失败')
+  }
+  return r.json()
+}
+
 export async function uploadAvatar(file: File): Promise<string> {
   const auth = useAuthStore()
   const form = new FormData()

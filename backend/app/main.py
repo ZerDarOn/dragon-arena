@@ -300,8 +300,24 @@ async def delete_item(item_id: str):
 
 @app.get("/api/library", response_model=List[LibraryEntry], dependencies=[Depends(get_current_user)])
 async def list_library(category: Optional[str] = None):
-    """所有登录用户可读。category 可选：event|trap|monster|adventure|npc。"""
+    """所有登录用户可读。category 可选：event|trap|monster|adventure|npc。
+    无 category 时返回全部——也作为「导出」用：前端直接把这个数组存成文件即可。"""
     return library_service.list(category)
+
+
+class LibraryImportRequest(BaseModel):
+    entries: List[dict]
+    mode: Optional[str] = "upsert"   # upsert | replace
+
+
+@app.post("/api/library/import", dependencies=[Depends(require_admin)])
+async def import_library(req: LibraryImportRequest):
+    """导入内容库（仅管理员）。entries 为 LibraryEntry 数组（与导出格式一致，id 可省略）。
+    格式即规范：AI 读 Excel 整理成这个数组就能一键导入。"""
+    try:
+        return library_service.import_entries(req.entries, mode=req.mode or "upsert")
+    except Exception as e:
+        raise HTTPException(400, f"导入失败：{e}")
 
 
 # ---- 头像上传 ----

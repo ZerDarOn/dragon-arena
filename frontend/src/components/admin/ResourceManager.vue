@@ -249,6 +249,14 @@
       </div>
       <div class="add-form">
         <input v-model="libFilter" placeholder="搜索内容库..." class="search-input" />
+        <button class="lib-io" @click="exportLibrary" :disabled="!libEntries.length"
+                title="导出全部内容库为 JSON（即导入用的规范格式）">⬇ 导出</button>
+        <label v-if="canManageLibrary" class="lib-io import"
+               title="导入 JSON 数组（与导出同格式，id 可省略，按 id 合并）">
+          {{ libImporting ? '导入中…' : '⬆ 导入' }}
+          <input type="file" accept="application/json,.json" @change="onImportLibrary" hidden />
+        </label>
+        <span class="lib-count">{{ filteredLibrary.length }}/{{ libEntries.length }}</span>
       </div>
       <div v-if="libLoading" class="loading">加载中...</div>
       <ul v-else class="sheet-list">
@@ -297,8 +305,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { listAllCharacters, listMyCharacters, listLibrary, uploadAvatar } from '../../api/rest'
+import { listAllCharacters, listMyCharacters, listLibrary, importLibrary, uploadAvatar } from '../../api/rest'
 import type { CharacterSheet, Actor, ActorCreate, Item, ItemCreate, LibraryEntry } from '../../api/types'
+import { pushToast } from '../../composables/useToast'
 import { monsters, equips, objects } from '../../stores/resources'
 import { useActorStore } from '../../stores/actors'
 import { useItemStore } from '../../stores/items'
@@ -557,6 +566,38 @@ const filteredLibrary = computed(() => {
     (!q || e.name.toLowerCase().includes(q) || e.effect_text.toLowerCase().includes(q)))
 })
 
+// 导出：把当前内容库存成 JSON 文件（即"规范格式"，AI 照此整理 Excel 即可一键导入）
+function exportLibrary() {
+  const blob = new Blob([JSON.stringify(libEntries.value, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `library_export_${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+// 导入：上传 JSON 数组（与导出同格式，id 可省略），按 id upsert 并持久化
+const libImporting = ref(false)
+async function onImportLibrary(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  libImporting.value = true
+  try {
+    const data = JSON.parse(await file.text())
+    const entries = Array.isArray(data) ? data : data.entries
+    if (!Array.isArray(entries)) throw new Error('文件应是条目数组（或 {entries:[...]}）')
+    const res = await importLibrary(entries, 'upsert')
+    await loadLibrary()
+    pushToast(`导入成功：新增 ${res.added ?? 0} · 更新 ${res.updated ?? 0} · 共 ${res.total}`, 'info')
+  } catch (err) {
+    pushToast('导入失败：' + (err as Error).message, 'error')
+  } finally {
+    libImporting.value = false
+    input.value = ''
+  }
+}
+
 // 角色卡保存/新建/删除后（CharacterSheetEditor 派发）刷新「我的角色卡」列表
 function onSheetsChanged() { loadMySheets() }
 
@@ -640,6 +681,11 @@ onUnmounted(() => window.removeEventListener('sheets-changed', onSheetsChanged))
 .lib-list .meta { display: block; margin-top: 2px; white-space: normal; }
 .kv b { color: #666; font-weight: 600; }
 .lib-note { margin: 4px 0 0; font-size: 11px; color: #888; }
+.lib-io { padding: 4px 8px; font-size: 12px; background: #0f3460; color: #fff; border: none;
+  border-radius: 3px; cursor: pointer; white-space: nowrap; }
+.lib-io:disabled { background: #ccc; cursor: not-allowed; }
+.lib-io.import { background: #0a7; display: inline-flex; align-items: center; }
+.lib-count { font-size: 11px; color: #999; align-self: center; margin-left: auto; }
 .actor-card.dragging { opacity: 0.6; background: #e8f0ff; box-shadow: 0 0 0 2px #0f3460; }
 .mini-btn { padding: 2px 6px; border: 1px solid #ccc; background: #fff;
   border-radius: 2px; cursor: pointer; font-size: 11px; }
