@@ -89,16 +89,18 @@
         <!-- 战役态：DMConsole(管理员) + GameCanvas -->
         <template v-else>
           <DMConsole v-if="auth.isAdmin" ref="dmRef"
-                     @resize="onMapResize" @fill-area="onFillArea" @set-poison-circle="onSetPoisonCircle" @set-fog-of-war="onSetFogOfWar" @set-player-placement="onSetPlayerPlacement" @set-free-mode="onSetFreeMode" @random-placement="onRandomPlacement" @set-turn-order="onSetTurnOrder" @shuffle-turn-order="onShuffleTurn" @force-set-actor="onForceActor" @clear-combat-log="onClearCombatLog" />
+                     @resize="onMapResize" @fill-area="onFillArea" @set-poison-circle="onSetPoisonCircle" @set-fog-of-war="onSetFogOfWar" @set-player-placement="onSetPlayerPlacement" @set-free-mode="onSetFreeMode" @random-placement="onRandomPlacement" @bg-transform="onBgTransform" @set-turn-order="onSetTurnOrder" @shuffle-turn-order="onShuffleTurn" @force-set-actor="onForceActor" @clear-combat-log="onClearCombatLog" />
           <!-- 底图工具栏（管理员可见） -->
           <div v-if="auth.isAdmin" class="bg-toolbar">
             <label class="bg-btn">
-              导入底图
-              <input type="file" accept="image/*" @change="onBgUpload" hidden />
+              {{ bgUploading ? '上传中...' : '导入底图' }}
+              <input type="file" accept="image/*" @change="onBgUpload" hidden :disabled="bgUploading" />
             </label>
-            <template v-if="bgImageData">
+            <template v-if="room.room?.bg_image">
               <label class="bg-opacity">透明度
-                <input type="range" min="0" max="1" step="0.1" v-model.number="bgOpacity" />
+                <input type="range" min="0" max="1" step="0.1"
+                       :value="room.room?.bg_opacity ?? 0.5"
+                       @change="onBgOpacityInput" />
               </label>
               <button @click="clearBgImage">移除底图</button>
             </template>
@@ -130,8 +132,12 @@
                         :detected-tokens="room.room.detected_tokens"
                         :terrain-brush="dmRef?.selected"
                         :light-radius="dmRef?.lightRadius"
-                        :bg-image="bgImageData"
-                        :bg-opacity="bgOpacity"
+                        :bg-image="room.room?.bg_image"
+                        :bg-opacity="room.room?.bg_opacity ?? 0.5"
+                        :bg-offset-x="room.room?.bg_offset_x"
+                        :bg-offset-y="room.room?.bg_offset_y"
+                        :bg-scale-x="room.room?.bg_scale_x"
+                        :bg-scale-y="room.room?.bg_scale_y"
                         @path-committed="onPath"
                         @cell-click="onCellClick"
                         @token-selected="onTokenSelected"
@@ -300,7 +306,7 @@ import { useItemStore } from '../stores/items'
 import { WSClient, type ServerMessage, type ConnectionStatus } from '../api/ws'
 import {
   createRoom, listRooms, fetchMe, updateRoomConfig,
-  listMyCharacters,
+  listMyCharacters, uploadMapBg,
 } from '../api/rest'
 import { pushToast } from '../composables/useToast'
 import { playAnimation } from '../services/diceBoxBridge'
@@ -371,9 +377,10 @@ function onSpawnSheet(payload: { sheet: CharacterSheet; x: number; y: number }) 
   })
 }
 
-function wsSend(msg: any) { 
+function wsSend(msg: any) {
   applyOptimisticUpdate(msg)
-  ws?.send(msg) 
+  if (!ws) { console.warn('[ws] not connected, msg dropped:', msg.type); return }
+  ws.send(msg)
 }
 
 // 乐观更新：发送消息前立即修改本地 store，下次 state_sync 会覆盖为权威状态
@@ -655,7 +662,6 @@ async function connectBattle(roomId: string) {
   ws.connect(roomId, auth.token!)
   // 加载本局战争迷雾记忆
   fow.load(roomId, auth.user?.id || '')
-  loadBgForRoom(roomId)
 }
 
 function disconnectWs() {
@@ -687,6 +693,10 @@ function triggerDamageFeedback() {
 function dispatchMessage(msg: ServerMessage) {
   const m = msg as any
   if (m.type === 'state_sync') {
+    // DEBUG: 确认 bg_image 是否从后端到达
+    if (m.payload.bg_image !== undefined) {
+      console.log('[bg] state_sync bg_image =', m.payload.bg_image?.substring(0, 80))
+    }
     room.setState(m.payload)
     // 记录探索记忆
     if (m.payload.visible_cells && !auth.isAdmin) {
@@ -915,38 +925,36 @@ function onFillArea(area: { x1: number; y1: number; x2: number; y2: number; type
   wsSend({ type: 'fill_terrain', payload: area })
 }
 
-// --- 底图导入（本地存储，按 roomId）---
-const bgImageData = ref<string>('')
-const bgOpacity = ref(0.5)
-const BG_OPACITY_KEY = 'da_bg_opacity'
-
-function loadBgForRoom(roomId: string) {
-  bgImageData.value = localStorage.getItem(`da_bg_${roomId}`) || ''
-  const op = localStorage.getItem(BG_OPACITY_KEY)
-  bgOpacity.value = op ? parseFloat(op) : 0.5
-}
-
+// --- 底图导入（HTTP 上传拿 URL，再通过 ws 广播给全员）---
+const bgUploading = ref(false)
 function onBgUpload(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  const reader = new FileReader()
-  reader.onload = () => {
-    bgImageData.value = reader.result as string
-    const rid = room.room?.id
-    if (rid) {
-      try { localStorage.setItem(`da_bg_${rid}`, bgImageData.value) }
-      catch (err) { console.warn('底图过大，无法存入 localStorage', err) }
-    }
-  }
-  reader.readAsDataURL(file)
+  bgUploading.value = true
+  uploadMapBg(file).then(url => {
+    console.log('[bg] uploaded, url =', url)
+    wsSend({ type: 'set_bg_image', payload: { image: url } })
+    console.log('[bg] wsSend set_bg_image sent')
+  }).catch(err => {
+    pushToast(err.message || '底图上传失败', 'error')
+  }).finally(() => {
+    bgUploading.value = false
+  })
   input.value = ''  // 允许再次选同一文件
 }
 
+function onBgOpacityInput(e: Event) {
+  const v = parseFloat((e.target as HTMLInputElement).value)
+  wsSend({ type: 'set_bg_image', payload: { opacity: v } })
+}
+
+function onBgTransform(t: { offset_x: number; offset_y: number; scale_x: number; scale_y: number }) {
+  wsSend({ type: 'set_bg_image', payload: t })
+}
+
 function clearBgImage() {
-  bgImageData.value = ''
-  const rid = room.room?.id
-  if (rid) localStorage.removeItem(`da_bg_${rid}`)
+  wsSend({ type: 'set_bg_image', payload: { image: null } })
 }
 
 onMounted(async () => {
@@ -957,11 +965,6 @@ onMounted(async () => {
 // 监听 room 变化，自动触发落子提示
 watch(() => room.room, (r) => {
   if (r) checkPlacementNeeded()
-})
-
-// opacity 变化持久化
-watch(bgOpacity, (v) => {
-  try { localStorage.setItem(BG_OPACITY_KEY, String(v)) } catch {}
 })
 
 onUnmounted(() => { disconnectWs() })

@@ -88,6 +88,11 @@ export interface Room {
   game_map?: GameMap
   current_actor?: string; turn_order: string[]
   big_turn: number; sub_turn: number
+  // 底图（场景背景）
+  bg_image?: string
+  bg_opacity?: number
+  bg_offset_x?: number; bg_offset_y?: number
+  bg_scale_x?: number; bg_scale_y?: number
   // 服务端按玩家定制追加（管理员视图无）
   visible_cells?: [number, number][]
   detected_tokens?: Record<string, string>

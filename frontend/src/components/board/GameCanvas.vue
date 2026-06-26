@@ -67,6 +67,10 @@ const props = defineProps<{
   isAdmin?: boolean
   bgImage?: string      // 底图 dataURL
   bgOpacity?: number    // 0-1
+  bgOffsetX?: number    // 底图偏移（格数，可负）
+  bgOffsetY?: number
+  bgScaleX?: number     // 缩放（1=撑满地图）
+  bgScaleY?: number
   combatMode?: 'attack' | 'sprint' | null  // 战斗模式
   attackTargets?: string[]                 // 已选中的攻击目标 token id（多选）
 }>()
@@ -232,18 +236,20 @@ function clearMarkers() {
   draw()
 }
 
-// 底图 Image 缓存（dataURL -> HTMLImageElement）
+// 底图 Image 缓存（URL 或 dataURL -> HTMLImageElement）
 const bgImgCache = new Map<string, HTMLImageElement>()
 const bgImgLoading = new Set<string>()
-function getBgImg(dataUrl: string): HTMLImageElement | null {
-  if (bgImgCache.has(dataUrl)) return bgImgCache.get(dataUrl)!
-  if (bgImgLoading.has(dataUrl)) return null
-  bgImgLoading.add(dataUrl)
+function getBgImg(src: string): HTMLImageElement | null {
+  if (bgImgCache.has(src)) return bgImgCache.get(src)!
+  if (bgImgLoading.has(src)) return null
+  bgImgLoading.add(src)
   const img = new Image()
-  img.onload = () => { bgImgLoading.delete(dataUrl); draw() }
-  img.onerror = () => { bgImgLoading.delete(dataUrl) }
-  img.src = dataUrl
-  bgImgCache.set(dataUrl, img)
+  // 跨域图片必须设置 crossOrigin，否则 canvas 被 tainted 后 drawImage 静默失败
+  if (!src.startsWith('data:')) img.crossOrigin = 'anonymous'
+  img.onload = () => { bgImgLoading.delete(src); console.log('[bg] img loaded', src.substring(0, 60), img.naturalWidth + 'x' + img.naturalHeight); draw() }
+  img.onerror = (e) => { bgImgLoading.delete(src); console.error('[bg] img load failed', src.substring(0, 60), e) }
+  img.src = src
+  bgImgCache.set(src, img)
   return null  // 首次返回 null，加载完成后 onload 触发重绘
 }
 
@@ -317,7 +323,7 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, cssW, cssH)
 
-  drawLayer1_Background(ctx, cv)
+  drawLayer1_Background(ctx)
   drawLayer2_Terrain(ctx)
   drawLayer3_DarknessAndLight(ctx)
   drawLayer4_FogOfWar(ctx)
@@ -334,12 +340,22 @@ function draw() {
 /* ================================================================
    Layer 1 — 底图
    ================================================================ */
-function drawLayer1_Background(ctx: CanvasRenderingContext2D, cv: HTMLCanvasElement) {
+function drawLayer1_Background(ctx: CanvasRenderingContext2D) {
   if (!props.bgImage) return
   const img = getBgImg(props.bgImage)
   if (!img) return
+  const cfg = props.room.config
+  const cssW = cfg.map_width * CELL
+  const cssH = cfg.map_height * CELL
+  // 底图变换：offset 平移（格数*CELL），scale 缩放（1=撑满地图）
+  const offX = (props.bgOffsetX ?? 0) * CELL
+  const offY = (props.bgOffsetY ?? 0) * CELL
+  const sx = props.bgScaleX ?? 1
+  const sy = props.bgScaleY ?? 1
+  const dw = cssW * sx
+  const dh = cssH * sy
   ctx.globalAlpha = props.bgOpacity ?? 0.5
-  ctx.drawImage(img, 0, 0, cv.width, cv.height)
+  ctx.drawImage(img, offX, offY, dw, dh)
   ctx.globalAlpha = 1
 }
 
@@ -349,14 +365,24 @@ function drawLayer1_Background(ctx: CanvasRenderingContext2D, cv: HTMLCanvasElem
 function drawLayer2_Terrain(ctx: CanvasRenderingContext2D) {
   const cfg = props.room.config
   const map = props.room.game_map
+  // 有底图时，平地不画纯色（让底图透出），仅画特殊地形覆盖
+  const hasBg = !!props.bgImage
   for (let y = 0; y < cfg.map_height; y++) {
     for (let x = 0; x < cfg.map_width; x++) {
       const vis = !props.visibleCells || props.visibleCells.has(key(x, y))
       if (!vis) { ctx.fillStyle = '#222'; ctx.fillRect(x * CELL, y * CELL, CELL, CELL); continue }
+      const cell = map?.terrain[y]?.[x]
+      const cellType = cell?.type || 'flat'
+
+      // 有底图时，平地格子跳过纯色填充（底图可见）
+      // 无底图时，照旧画纯色
+      if (hasBg && cellType === 'flat' && !cell?.is_smoke && !cell?.height) {
+        continue
+      }
+
       let bg = '#f0f0f0'
-      if (map?.terrain[y]?.[x]) {
-        const cell = map.terrain[y][x]
-        bg = TERRAIN_COLORS[cell.type] || '#f0f0f0'
+      if (cell) {
+        bg = TERRAIN_COLORS[cellType] || '#f0f0f0'
         if (cell.is_smoke) bg = '#bbb'
         // 光源暖黄（不与暗 mix，暗由 Layer 3 单独处理）
         if (cell.light_radius > 0) bg = mixColor(bg, '#ff8', 0.35)
@@ -1105,7 +1131,7 @@ onMounted(draw)
 onUnmounted(() => { panning.value = false; dragging.value = false; painting.value = false })
 watch(() => props.room, draw, { deep: true })
 watch(selectedTokenId, draw)
-watch(() => [props.bgImage, props.bgOpacity], draw)
+watch(() => [props.bgImage, props.bgOpacity, props.bgOffsetX, props.bgOffsetY, props.bgScaleX, props.bgScaleY], draw)
 
 defineExpose({
   terrainPaintMode,

@@ -104,6 +104,19 @@ export async function uploadAvatar(file: File): Promise<string> {
   return `${API}${data.url}`
 }
 
+export async function uploadMapBg(file: File): Promise<string> {
+  const auth = useAuthStore()
+  const form = new FormData()
+  form.append('file', file)
+  const r = await fetch(`${API}/api/upload/map`, {
+    method: 'POST', headers: { ...auth.authHeader() }, body: form,
+  })
+  if (!r.ok) throw new Error('底图上传失败')
+  const data = await r.json()
+  // 返回相对路径，前端走 vite proxy（/uploads → localhost:8000），避免 canvas 跨域污染
+  return data.url
+}
+
 export async function adminListUsers(): Promise<UserPublic[]> {
   const r = await fetch(`${API}/admin/users`, { headers: authHeaders() })
   if (!r.ok) throw new Error('无法获取用户列表')

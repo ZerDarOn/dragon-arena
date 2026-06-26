@@ -131,13 +131,26 @@
       <button class="btn-danger" @click="emitClearLog">清除战斗日志</button>
     </div>
 
-    <!-- 地图尺寸 -->
+    <!-- 地图尺寸 + 底图对齐 -->
     <div v-if="activeTab === 'map'" class="panel">
       <label>宽度 <code>{{ w }}</code></label>
       <input type="range" v-model.number="w" min="10" max="80" @change="emitResize" />
       <label>高度 <code>{{ h }}</code></label>
       <input type="range" v-model.number="h" min="10" max="80" @change="emitResize" />
       <p class="warn">⚠ 调整尺寸会清空整张地图已绘制的地形（不只是超界区域），且不可撤销</p>
+      <hr />
+      <h4>底图对齐</h4>
+      <div class="bg-align-grid">
+        <label>X 偏移 <code>{{ bgOX.toFixed(1) }}</code></label>
+        <input type="range" v-model.number="bgOX" min="-20" max="20" step="0.5" @change="emitBgTransform" />
+        <label>Y 偏移 <code>{{ bgOY.toFixed(1) }}</code></label>
+        <input type="range" v-model.number="bgOY" min="-20" max="20" step="0.5" @change="emitBgTransform" />
+        <label>X 缩放 <code>{{ bgSX.toFixed(2) }}</code></label>
+        <input type="range" v-model.number="bgSX" min="0.2" max="3" step="0.05" @change="emitBgTransform" />
+        <label>Y 缩放 <code>{{ bgSY.toFixed(2) }}</code></label>
+        <input type="range" v-model.number="bgSY" min="0.2" max="3" step="0.05" @change="emitBgTransform" />
+      </div>
+      <button class="btn" @click="resetBgTransform">重置变换</button>
     </div>
   </div>
 </template>
@@ -153,6 +166,7 @@ const emit = defineEmits<{
   (e: 'set-player-placement', enabled: boolean): void
   (e: 'set-free-mode', enabled: boolean): void
   (e: 'random-placement', mode: string, area?: { x1: number; y1: number; x2: number; y2: number }): void
+  (e: 'bg-transform', t: { offset_x: number; offset_y: number; scale_x: number; scale_y: number }): void
   (e: 'set-turn-order', order: string[]): void
   (e: 'shuffle-turn-order'): void
   (e: 'force-set-actor', tokenId: string): void
@@ -257,6 +271,20 @@ function emitRandom(mode: string) {
   }
 }
 
+// 底图对齐变换
+const bgOX = ref(0); const bgOY = ref(0)
+const bgSX = ref(1); const bgSY = ref(1)
+function emitBgTransform() {
+  emit('bg-transform', {
+    offset_x: bgOX.value, offset_y: bgOY.value,
+    scale_x: bgSX.value, scale_y: bgSY.value,
+  })
+}
+function resetBgTransform() {
+  bgOX.value = 0; bgOY.value = 0; bgSX.value = 1; bgSY.value = 1
+  emitBgTransform()
+}
+
 // Turn order
 const turnOrderText = ref('')
 function emitSetOrder() {
@@ -304,6 +332,9 @@ defineExpose({
 .coord input { width: 40px; padding: 3px; font-size: 11px; border: 1px solid #ccc; border-radius: 2px; }
 .coord select { padding: 3px; font-size: 11px; }
 .coord button { padding: 4px 8px; background: #0f3460; color: #fff; border: none; border-radius: 2px; cursor: pointer; }
+.bg-align-grid { display: grid; gap: 6px; margin: 6px 0; }
+.bg-align-grid label { font-size: 11px; color: #555; display: flex; justify-content: space-between; }
+.bg-align-grid code { color: #0f3460; font-weight: bold; }
 .hint { margin: 6px 0 0; color: #888; font-size: 11px; }
 .tmpl-pick { margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px dashed #ddd; }
 .tmpl-pick label { font-size: 10px; color: #666; margin-right: 4px; }

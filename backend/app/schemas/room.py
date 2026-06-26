@@ -88,3 +88,10 @@ class Room(BaseModel):
     sub_turn: int = 0
     # Phase 2: 吃鸡排名——按淘汰顺序记录（先死者垫底）
     elimination_order: List[str] = Field(default_factory=list)
+    # 底图（场景背景）——DM 上传后广播给全员
+    bg_image: Optional[str] = None          # dataURL
+    bg_opacity: float = 0.5
+    bg_offset_x: float = 0.0  # 格数，可负
+    bg_offset_y: float = 0.0
+    bg_scale_x: float = 1.0   # 1=撑满地图
+    bg_scale_y: float = 1.0

@@ -406,6 +406,29 @@ async def upload_avatar(file: UploadFile = File(...)):
     return {"url": f"/uploads/{filename}"}
 
 
+@app.post("/api/upload/map", dependencies=[Depends(get_current_user)])
+async def upload_map_bg(file: UploadFile = File(...)):
+    """上传场景底图，返回可访问 URL。支持 png/jpg/webp，最大 10MB。"""
+    ALLOWED_TYPES = {"image/png", "image/jpeg", "image/webp"}
+    MAX_SIZE = 10 * 1024 * 1024  # 10MB
+
+    if file.content_type not in ALLOWED_TYPES:
+        raise HTTPException(400, "只支持 png/jpg/webp 图片")
+
+    content = await file.read()
+    if len(content) > MAX_SIZE:
+        raise HTTPException(400, "底图超过 10MB 限制")
+
+    ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}.get(file.content_type, "bin")
+    import uuid, time
+    filename = f"map_{int(time.time())}_{uuid.uuid4().hex[:8]}.{ext}"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    return {"url": f"/uploads/{filename}"}
+
+
 @app.websocket("/ws/{room_id}")
 async def ws_endpoint(websocket: WebSocket, room_id: str,
                       player_id: str = "", nickname: str = "",

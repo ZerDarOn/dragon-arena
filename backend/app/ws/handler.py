@@ -587,6 +587,31 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                         if gs.snapshot_storage:
                             gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
+                elif t == "set_bg_image":
+                    # DM 设置底图（dataURL + 变换参数），广播给全员
+                    if not is_admin:
+                        await connection_mgr.send_to_player(room_id, player_id, {
+                            "type": "error", "payload": {"message": "only admin can set background"}
+                        })
+                        continue
+                    async with gs.lock:
+                        if "image" in p:
+                            gs.room.bg_image = p["image"] or None
+                        if "opacity" in p:
+                            gs.room.bg_opacity = float(p["opacity"])
+                        if "offset_x" in p:
+                            gs.room.bg_offset_x = float(p["offset_x"])
+                        if "offset_y" in p:
+                            gs.room.bg_offset_y = float(p["offset_y"])
+                        if "scale_x" in p:
+                            gs.room.bg_scale_x = float(p["scale_x"])
+                        if "scale_y" in p:
+                            gs.room.bg_scale_y = float(p["scale_y"])
+                        _log_event(gs, player_id, "set_bg_image")
+                        # 底图可能很大，不存入 snapshot（避免 JSON 爆炸）
+                        if gs.snapshot_storage and not gs.room.bg_image:
+                            gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
+                    await _broadcast_state(gs, room_id)
                 elif t == "random_placement":
                     # DM 一键随机落子：给所有未落子的玩家 token 分配随机位置
                     if not is_admin:
