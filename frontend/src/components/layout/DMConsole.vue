@@ -5,19 +5,33 @@
               :class="{ active: activeTab === tab.key }">{{ tab.label }}</button>
     </div>
 
-    <!-- 地形笔刷 -->
+    <!-- 地形笔刷（分 3 组：地貌/障碍/环境） -->
     <div v-if="activeTab === 'terrain'" class="panel">
       <div class="paint-modes">
         <button v-for="m in paintModes" :key="m.v" @click="paintMode = m.v"
                 :class="{ active: paintMode === m.v }">{{ m.l }}</button>
       </div>
+
+      <!-- 地貌（纯视觉，不挡路） -->
       <div class="brush-group">
-        <label>地貌</label>
+        <label>地貌（不挡路）</label>
         <div class="brush-row">
           <button v-for="t in terrainTypes" :key="t.v" @click="selected = t.v"
                   :class="{ active: selected === t.v }">{{ t.l }}</button>
         </div>
       </div>
+
+      <!-- 障碍（挡移动/视野） -->
+      <div class="brush-group">
+        <label>障碍</label>
+        <div class="brush-row">
+          <button v-for="t in obstacleTypes" :key="t.v" @click="selected = t.v"
+                  :class="{ active: selected === t.v }"
+                  :title="t.desc">{{ t.l }}</button>
+        </div>
+      </div>
+
+      <!-- 环境 -->
       <div class="brush-group">
         <label>环境</label>
         <div class="brush-row">
@@ -25,6 +39,7 @@
                   :class="{ active: selected === t.v }">{{ t.l }}</button>
         </div>
       </div>
+
       <div class="fill-tool">
         <label>批量填充</label>
         <div class="coord">
@@ -34,10 +49,14 @@
           <input v-model.number="fx2" type="number" placeholder="x2" />
           <input v-model.number="fy2" type="number" placeholder="y2" />
           <select v-model="fillType">
-            <option value="wall">墙</option>
-            <option value="grass">草</option>
-            <option value="water">水</option>
-            <option value="high">高地</option>
+            <option value="wall">实体墙</option>
+            <option value="door">门</option>
+            <option value="glass_wall">透明墙</option>
+            <option value="grass">草丛</option>
+            <option value="water">浅水</option>
+            <option value="water_deep">深水</option>
+            <option value="lava">岩浆</option>
+            <option value="poison">毒沼</option>
             <option value="flat">平地</option>
           </select>
           <button @click="doFill">填充</button>
@@ -185,17 +204,28 @@ const tabs = [
 
 // Terrain brush
 const selected = ref('')
-const lightRadius = ref(3)  // 光源笔刷半径
+const lightRadius = ref(3)
 const terrainTypes = [
   { v: '', l: '关闭' },
-  { v: 'flat', l: '平地' }, { v: 'wall', l: '墙' },
-  { v: 'grass', l: '草丛' }, { v: 'water', l: '水' }, { v: 'high', l: '高地' },
+  { v: 'flat', l: '平地' },
+  { v: 'grass', l: '草丛' }, { v: 'dirt', l: '泥地' },
+  { v: 'stone', l: '石地' }, { v: 'sand', l: '沙地' },
+  { v: 'wood', l: '木板' }, { v: 'ice', l: '冰面' },
+]
+const obstacleTypes = [
+  { v: 'wall', l: '实体墙', desc: '挡移动+挡视野+挡声音' },
+  { v: 'door', l: '门', desc: '可开关，关=挡一切，开=不挡' },
+  { v: 'glass_wall', l: '透明墙', desc: '挡视野不挡移动（幻术墙/玻璃）' },
+  { v: 'water_deep', l: '深水', desc: '可走+视觉区分' },
+  { v: 'lava', l: '岩浆', desc: '挡移动+伤害' },
+  { v: 'poison', l: '毒沼', desc: '挡移动+伤害' },
 ]
 const envTypes = [
-  { v: 'dark', l: '黑暗' }, { v: 'light', l: '光源' }, { v: 'clear_meta', l: '清暗/光' },
+  { v: 'dark', l: '黑暗' }, { v: 'light', l: '光源' },
+  { v: 'smoke', l: '烟雾' }, { v: 'clear_meta', l: '清环境' },
 ]
 const typeLabel = computed(() => {
-  const all = [...terrainTypes, ...envTypes]
+  const all = [...terrainTypes, ...obstacleTypes, ...envTypes]
   return all.find((t) => t.v === selected.value)?.l ?? ''
 })
 

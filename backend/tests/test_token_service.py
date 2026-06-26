@@ -40,7 +40,7 @@ def test_move_path_through_wall(setup):
     MapService(svc.map).set_terrain(6, 5, "wall")
     result = svc.move_along_path("t1", [(6, 5), (7, 5)])
     assert result.success is False
-    assert "wall" in result.reason.lower()
+    assert "impassable" in result.reason.lower() or "wall" in result.reason.lower()
 
 
 def test_move_path_insufficient_ap(setup):

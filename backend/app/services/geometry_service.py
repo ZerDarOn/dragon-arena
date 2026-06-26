@@ -83,10 +83,13 @@ def is_in_sector(origin: Point, facing: int, target: Point, max_radius: int) -> 
 
 
 def has_wall_between(game_map, a: Point, b: Point) -> bool:
-    """Check if any wall cell lies on the line between a and b (exclusive endpoints)."""
+    """Check if any solid wall cell lies on the line between a and b (exclusive).
+    语义 = 实体墙（blocks_movement AND blocks_vision），声音穿玻璃/烟雾/水。"""
     cells = bresenham_line(a, b)
     for (x, y) in cells[1:-1]:
         if 0 <= y < game_map.height and 0 <= x < game_map.width:
-            if game_map.terrain[y][x].type == "wall":
+            cell = game_map.terrain[y][x]
+            # 实体墙 = 两布尔都 True（is_sound_blocking 语义）
+            if cell.blocks_movement and cell.blocks_vision:
                 return True
     return False

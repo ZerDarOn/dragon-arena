@@ -4,7 +4,7 @@
        @mousedown="onDown"
        @mousemove="onMouseMove"
        @mouseup="onMouseUp"
-       @mouseleave="onMouseUp"
+       @mouseleave="onCanvasLeave"
        @dblclick="onDblClick"
        @drop="onDrop"
        @dragover.prevent=""
@@ -54,6 +54,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, onUnmounted } from 'vue'
 import type { Room } from '../../api/types'
+import { computeHalfWallRects, brushColorOf } from './halfWall'
 
 const props = defineProps<{
   room: Room
@@ -65,6 +66,7 @@ const props = defineProps<{
   terrainBrush?: string
   lightRadius?: number
   isAdmin?: boolean
+  freeMode?: boolean
   bgImage?: string      // 底图 dataURL
   bgOpacity?: number    // 0-1
   bgOffsetX?: number    // 底图偏移（格数，可负）
@@ -135,6 +137,10 @@ interface AoeMarker {
 }
 const aoeMarkers = ref<AoeMarker[]>([])
 const currentAoe = ref<AoeMarker | null>(null)
+// AOE 标记交互：选中索引 + 拖拽状态
+const selectedAoeIdx = ref<number | null>(null)
+const aoeDragMode = ref<'none' | 'move' | 'start' | 'end'>('none')
+const aoeDragOffset = ref<[number, number]>([0, 0])  // 拖拽整体时的偏移
 
 // 手绘注释（世界像素坐标点序列）
 interface DrawStroke {
@@ -303,13 +309,15 @@ function hexToRgb(hex: string): [number, number, number] | null {
 }
 
 const TERRAIN_COLORS: Record<string, string> = {
-  flat: '#f0f0f0', wall: '#444', grass: '#9c9', water: '#7cf',
-  high: '#da6', smoke: '#ccc',
+  flat: '#f0f0f0', grass: '#9c9', dirt: '#b88', stone: '#aaa',
+  sand: '#ed5', water: '#7cf', ice: '#cef', wood: '#c96',
+  lava: '#f60', glass: '#cef', poison: '#9c0',
 }
 
 /**
- * draw() — 四层渲染管道
- *   L1 底图 → L2 地形 → L3 暗/光 → L4 战争迷雾 → Token → UI
+ * draw() — 七层渲染管道（§7.4）
+ *   L1 底图 → L2 地形地貌 → L3 暗/光 → L4 战争迷雾
+ *   → L5 网格线（独立） → Token → L6 DM叠加 → L7 UI
  */
 function draw() {
   const cv = canvasRef.value; if (!cv) return
@@ -327,11 +335,13 @@ function draw() {
   drawLayer2_Terrain(ctx)
   drawLayer3_DarknessAndLight(ctx)
   drawLayer4_FogOfWar(ctx)
+  drawLayer5_Grid(ctx)
   drawTerrainPaintPreview(ctx)
   drawTerrainHover(ctx)
   drawAoeMarkers(ctx)
   drawStrokes_(ctx)
   drawTokens(ctx)
+  drawLayer6_DmOverlay(ctx)
   drawPoisonCircle(ctx)
   drawDetectedMarkers(ctx)
   drawDragPath(ctx)
@@ -360,68 +370,178 @@ function drawLayer1_Background(ctx: CanvasRenderingContext2D) {
 }
 
 /* ================================================================
-   Layer 2 — 地形瓦片
+   Layer 2 — 地形地貌（按 terrain_type + wall_render 渲染）
    ================================================================ */
+
+/** 判断格子在指定方向是否有同类墙邻居（半格渲染用） */
+function wallNeighborIsSolid(map: any, x: number, y: number, dx: number, dy: number): boolean {
+  const nx = x + dx, ny = y + dy
+  if (ny < 0 || ny >= map.terrain.length || nx < 0 || nx >= map.terrain[0].length) return false
+  const c = map.terrain[ny]?.[nx]
+  return c?.wall_render === 'solid' && c?.blocks_movement && c?.blocks_vision
+}
+
 function drawLayer2_Terrain(ctx: CanvasRenderingContext2D) {
   const cfg = props.room.config
   const map = props.room.game_map
-  // 有底图时，平地不画纯色（让底图透出），仅画特殊地形覆盖
   const hasBg = !!props.bgImage
   for (let y = 0; y < cfg.map_height; y++) {
     for (let x = 0; x < cfg.map_width; x++) {
       const vis = !props.visibleCells || props.visibleCells.has(key(x, y))
       if (!vis) { ctx.fillStyle = '#222'; ctx.fillRect(x * CELL, y * CELL, CELL, CELL); continue }
       const cell = map?.terrain[y]?.[x]
-      const cellType = cell?.type || 'flat'
+      if (!cell) continue
 
-      // 有底图时，平地格子跳过纯色填充（底图可见）
-      // 无底图时，照旧画纯色
-      if (hasBg && cellType === 'flat' && !cell?.is_smoke && !cell?.height) {
+      const tt = cell.terrain_type || 'flat'
+      const wr = cell.wall_render || null
+
+      // 有底图 + 纯平地 → 跳过（底图可见）
+      if (hasBg && tt === 'flat' && !wr && !cell.is_smoke && !cell.height && !cell.blocks_movement && !cell.blocks_vision) {
         continue
       }
 
-      let bg = '#f0f0f0'
-      if (cell) {
-        bg = TERRAIN_COLORS[cellType] || '#f0f0f0'
-        if (cell.is_smoke) bg = '#bbb'
-        // 光源暖黄（不与暗 mix，暗由 Layer 3 单独处理）
-        if (cell.light_radius > 0) bg = mixColor(bg, '#ff8', 0.35)
-        if (cell.height) {
-          ctx.fillStyle = bg; ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
-          ctx.fillStyle = '#603'; ctx.font = '10px monospace'
-          ctx.fillText(String(cell.height), x * CELL + 2, y * CELL + 10)
-          continue
-        }
+      let bg = TERRAIN_COLORS[tt] || '#f0f0f0'
+      if (cell.is_smoke) bg = '#ccc'
+      // 光源视觉由 L3 离屏合成层负责，L2 不染色
+
+      // 高地：显示数字
+      if (cell.height) {
+        ctx.fillStyle = bg; ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+        ctx.fillStyle = '#603'; ctx.font = '10px monospace'
+        ctx.fillText(String(cell.height), x * CELL + 2, y * CELL + 10)
+        continue
       }
+
+      // ─── 墙体特殊渲染 ───
+      if (wr === 'solid') {
+        drawHalfCellWall(ctx, x, y, bg, map!)
+        continue
+      }
+      if (wr === 'door') {
+        ctx.fillStyle = cell.door_open ? '#8b6' : '#c96'
+        ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+        ctx.fillStyle = cell.door_open ? '#060' : '#420'
+        ctx.font = '12px monospace'
+        ctx.fillText(cell.door_open ? '🔓' : '🚪', x * CELL + CELL/2 - 7, y * CELL + CELL/2 + 4)
+        continue
+      }
+      if (wr === 'glass' || (cell.blocks_vision && !cell.blocks_movement)) {
+        // 透明墙：半透明蓝色边框
+        ctx.fillStyle = 'rgba(100, 200, 255, 0.25)'
+        ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+        ctx.strokeStyle = '#4af'; ctx.lineWidth = 2
+        ctx.strokeRect(x * CELL + 2, y * CELL + 2, CELL - 4, CELL - 4)
+        continue
+      }
+      if (wr === 'water_deep') {
+        ctx.fillStyle = '#39c'; ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+        ctx.strokeStyle = '#7cf'; ctx.lineWidth = 1
+        ctx.strokeRect(x * CELL, y * CELL, CELL, CELL)
+        continue
+      }
+
+      // ─── 普通地貌 ───
+      // 移动墙（blocks_movement=true 但非 solid 类型，如岩浆/毒沼）
+      if (cell.blocks_movement) {
+        ctx.fillStyle = bg; ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+        ctx.strokeStyle = '#c30'; ctx.lineWidth = 2  // 红色边框表示不可走
+        ctx.strokeRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2)
+        continue
+      }
+
+      // 无底图时画格子边框；有底图时只画填充（网格由 L5 负责）
       ctx.fillStyle = bg; ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
-      ctx.strokeStyle = '#999'; ctx.lineWidth = 1
-      ctx.strokeRect(x * CELL, y * CELL, CELL, CELL)
+      if (!hasBg) {
+        ctx.strokeStyle = '#999'; ctx.lineWidth = 1
+        ctx.strokeRect(x * CELL, y * CELL, CELL, CELL)
+      }
     }
   }
 }
 
+/** 半格视觉墙：墙体贴着有同类邻居的那一侧（§8） */
+function drawHalfCellWall(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, map: any) {
+  const px = x * CELL, py = y * CELL
+  const n = {
+    left: wallNeighborIsSolid(map, x, y, -1, 0),
+    right: wallNeighborIsSolid(map, x, y, 1, 0),
+    up: wallNeighborIsSolid(map, x, y, 0, -1),
+    down: wallNeighborIsSolid(map, x, y, 0, 1),
+  }
+  const rects = computeHalfWallRects(n)
+  ctx.fillStyle = color
+  for (const r of rects) {
+    ctx.fillRect(px + r.x * CELL, py + r.y * CELL, r.w * CELL, r.h * CELL)
+  }
+  // 描边：每个矩形独立描边
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1
+  for (const r of rects) {
+    ctx.strokeRect(px + r.x * CELL + 0.5, py + r.y * CELL + 0.5, r.w * CELL - 1, r.h * CELL - 1)
+  }
+}
+
 /* ================================================================
-   Layer 3 — 环境暗 + 光源（全局合成模式挖洞）
+   Layer 5 — 网格线（独立层，始终在地形之上）
+   ================================================================ */
+function drawLayer5_Grid(ctx: CanvasRenderingContext2D) {
+  const cfg = props.room.config
+  const hasBg = !!props.bgImage
+  // 有底图时网格线颜色更明显
+  ctx.strokeStyle = hasBg ? 'rgba(60, 60, 60, 0.35)' : 'rgba(120, 120, 120, 0.2)'
+  ctx.lineWidth = 1
+  for (let x = 0; x <= cfg.map_width; x++) {
+    ctx.beginPath()
+    ctx.moveTo(x * CELL + 0.5, 0)
+    ctx.lineTo(x * CELL + 0.5, cfg.map_height * CELL)
+    ctx.stroke()
+  }
+  for (let y = 0; y <= cfg.map_height; y++) {
+    ctx.beginPath()
+    ctx.moveTo(0, y * CELL + 0.5)
+    ctx.lineTo(cfg.map_width * CELL, y * CELL + 0.5)
+    ctx.stroke()
+  }
+}
+
+/* ================================================================
+   Layer 3 — 环境暗 + 光源（离屏合成：destination-out 只作用于暗遮罩）
    ================================================================ */
 function drawLayer3_DarknessAndLight(ctx: CanvasRenderingContext2D) {
   const cfg = props.room.config
   const map = props.room.game_map
   if (!map) return
 
-  // Pass 1: 画暗层
+  // 检测是否需要绘制暗层（任一格 is_dark）
+  let hasDark = false
+  for (let y = 0; y < cfg.map_height && !hasDark; y++) {
+    for (let x = 0; x < cfg.map_width; x++) {
+      if (map.terrain[y]?.[x]?.is_dark) { hasDark = true; break }
+    }
+  }
+  if (!hasDark) return
+
+  const cssW = cfg.map_width * CELL
+  const cssH = cfg.map_height * CELL
+
+  // 离屏 canvas：只承载暗遮罩 + 光源挖洞，最后整体合成回主画布
+  const off = document.createElement('canvas')
+  off.width = cssW; off.height = cssH
+  const octx = off.getContext('2d')!
+
+  // Pass 1: 画暗层（DM 强度减半，便于编辑时看清地形；玩家原强度）
+  const dmDim = props.isAdmin ? 0.5 : 1
   for (let y = 0; y < cfg.map_height; y++) {
     for (let x = 0; x < cfg.map_width; x++) {
       const cell = map.terrain[y]?.[x]
       if (!cell?.is_dark) continue
-      if (props.isAdmin) continue
-      const strength = cell.darkness_strength ?? 0.7
-      ctx.fillStyle = `rgba(0, 0, 0, ${strength * 0.75})`
-      ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+      const strength = (cell.darkness_strength ?? 0.7) * 0.75 * dmDim
+      octx.fillStyle = `rgba(0, 0, 0, ${strength})`
+      octx.fillRect(x * CELL, y * CELL, CELL, CELL)
     }
   }
 
-  // Pass 2: 光源挖洞（在暗层上擦出亮区）
-  ctx.globalCompositeOperation = 'destination-out'
+  // Pass 2: 光源挖洞 —— 只作用于离屏暗遮罩，不会擦穿主画布的地形
+  octx.globalCompositeOperation = 'destination-out'
   for (let y = 0; y < cfg.map_height; y++) {
     for (let x = 0; x < cfg.map_width; x++) {
       const cell = map.terrain[y]?.[x]
@@ -429,15 +549,18 @@ function drawLayer3_DarknessAndLight(ctx: CanvasRenderingContext2D) {
       const radius = cell.light_radius * CELL
       const cx = x * CELL + CELL / 2
       const cy = y * CELL + CELL / 2
-      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius)
+      const grad = octx.createRadialGradient(cx, cy, 0, cx, cy, radius)
       grad.addColorStop(0, 'rgba(0,0,0,1)')
       grad.addColorStop(0.6, 'rgba(0,0,0,0.5)')
       grad.addColorStop(1, 'rgba(0,0,0,0)')
-      ctx.fillStyle = grad
-      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2)
+      octx.fillStyle = grad
+      octx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2)
     }
   }
-  ctx.globalCompositeOperation = 'source-over'
+  octx.globalCompositeOperation = 'source-over'
+
+  // 合成回主画布（source-over，不伤害 L1/L2）
+  ctx.drawImage(off, 0, 0)
 }
 
 /* ================================================================
@@ -455,6 +578,50 @@ function drawLayer4_FogOfWar(ctx: CanvasRenderingContext2D) {
         ? 'rgba(40, 40, 40, 0.55)'
         : '#111'
       ctx.fillRect(x * CELL, y * CELL, CELL, CELL)
+    }
+  }
+}
+
+/* ================================================================
+   Layer 6 — DM 叠加层（仅管理员可见，标记障碍/门/视野属性）
+   ================================================================ */
+function drawLayer6_DmOverlay(ctx: CanvasRenderingContext2D) {
+  if (!props.isAdmin) return
+  const cfg = props.room.config
+  const map = props.room.game_map
+  if (!map) return
+
+  for (let y = 0; y < cfg.map_height; y++) {
+    for (let x = 0; x < cfg.map_width; x++) {
+      const cell = map.terrain[y]?.[x]
+      if (!cell) continue
+      const px = x * CELL, py = y * CELL
+
+      // 墙体：右上角实心方块角标
+      if (cell.wall_render === 'solid' || (cell.blocks_movement && cell.blocks_vision)) {
+        ctx.fillStyle = 'rgba(80, 30, 30, 0.85)'
+        ctx.fillRect(px + CELL - 7, py + 1, 6, 6)
+        continue
+      }
+
+      // 玻璃/透明墙（挡视野不挡移动）：蓝色虚线框
+      if (cell.blocks_vision && !cell.blocks_movement) {
+        ctx.strokeStyle = 'rgba(60, 140, 220, 0.9)'
+        ctx.lineWidth = 1
+        ctx.setLineDash([3, 2])
+        ctx.strokeRect(px + 2.5, py + 2.5, CELL - 5, CELL - 5)
+        ctx.setLineDash([])
+        continue
+      }
+
+      // 危险地形（不可走非墙）：红色虚线框
+      if (cell.blocks_movement) {
+        ctx.strokeStyle = 'rgba(220, 60, 60, 0.9)'
+        ctx.lineWidth = 1
+        ctx.setLineDash([2, 2])
+        ctx.strokeRect(px + 2.5, py + 2.5, CELL - 5, CELL - 5)
+        ctx.setLineDash([])
+      }
     }
   }
 }
@@ -559,15 +726,11 @@ function drawTokens(ctx: CanvasRenderingContext2D) {
 
 function drawTerrainPaintPreview(ctx: CanvasRenderingContext2D) {
   if (!props.terrainBrush || terrainPaintPreview.value.length === 0) return
-  const brush = props.terrainBrush
-  const colorMap: Record<string, string> = {
-    wall: 'rgba(68,68,68,0.5)', grass: 'rgba(153,204,153,0.5)',
-    water: 'rgba(119,204,255,0.5)', high: 'rgba(221,170,102,0.5)',
-    flat: 'rgba(240,240,240,0.5)',
-  }
-  ctx.fillStyle = colorMap[brush] || 'rgba(250,160,0,0.4)'
+  const c = brushColorOf(props.terrainBrush)
+  if (!c) return
+  ctx.fillStyle = c.fill
   for (const [px, py] of terrainPaintPreview.value) ctx.fillRect(px * CELL, py * CELL, CELL, CELL)
-  ctx.strokeStyle = '#fa0'; ctx.lineWidth = 2
+  ctx.strokeStyle = c.stroke; ctx.lineWidth = 2
   for (const [px, py] of terrainPaintPreview.value) ctx.strokeRect(px * CELL + 1, py * CELL + 1, CELL - 2, CELL - 2)
 }
 
@@ -575,14 +738,62 @@ function drawTerrainHover(ctx: CanvasRenderingContext2D) {
   const showHover = props.terrainBrush || ['measure', 'cone', 'line', 'sphere'].includes(tool.value)
   if (!hoveredCell.value || !showHover) return
   const [hx, hy] = hoveredCell.value
-  ctx.strokeStyle = '#fa0'; ctx.lineWidth = 2
+  // 画笔激活时使用画笔语义色；工具激活时用默认橙
+  const c = brushColorOf(props.terrainBrush) || { fill: 'rgba(250,160,0,0.18)', stroke: '#fa0' }
+  ctx.fillStyle = c.fill
+  ctx.fillRect(hx * CELL, hy * CELL, CELL, CELL)
+  ctx.strokeStyle = c.stroke; ctx.lineWidth = 2
   ctx.strokeRect(hx * CELL, hy * CELL, CELL, CELL)
 }
 
 function drawAoeMarkers(ctx: CanvasRenderingContext2D) {
   const all = [...aoeMarkers.value]
   if (currentAoe.value) all.push(currentAoe.value)
-  for (const m of all) drawAoe(ctx, m)
+  for (let i = 0; i < all.length; i++) {
+    drawAoe(ctx, all[i])
+    // 选中的标记画手柄
+    if (i === selectedAoeIdx.value && i < aoeMarkers.value.length) {
+      drawAoeHandles(ctx, all[i])
+    }
+  }
+}
+
+/** 给选中的 AOE 标记画调整手柄（起点/终点圆圈） */
+function drawAoeHandles(ctx: CanvasRenderingContext2D, m: AoeMarker) {
+  const [sx, sy] = m.start
+  const [ex, ey] = m.end
+  const handleRadius = 7
+  ctx.lineWidth = 2
+  // 起点手柄（绿色）
+  ctx.fillStyle = '#0f0'
+  ctx.strokeStyle = '#fff'
+  ctx.beginPath()
+  ctx.arc(sx * CELL + CELL/2, sy * CELL + CELL/2, handleRadius, 0, Math.PI * 2)
+  ctx.fill(); ctx.stroke()
+  // 终点手柄（红色）
+  ctx.fillStyle = '#f44'
+  ctx.beginPath()
+  ctx.arc(ex * CELL + CELL/2, ey * CELL + CELL/2, handleRadius, 0, Math.PI * 2)
+  ctx.fill(); ctx.stroke()
+}
+
+/** 命中检测：判断 (x,y) 是否命中某个 AOE 标记的手柄或本体 */
+function hitTestAoe(x: number, y: number): { idx: number; part: 'start' | 'end' | 'move' } | null {
+  const handleR = 0.5  // 手柄命中半径（格数）
+  const bodyR = 1.5    // 本体命中半径（格数，靠 近 start 或 end 即算）
+  for (let i = aoeMarkers.value.length - 1; i >= 0; i--) {
+    const m = aoeMarkers.value[i]
+    // 先检测手柄（优先级高）
+    const dsx = Math.abs(x - m.start[0]), dsy = Math.abs(y - m.start[1])
+    if (Math.max(dsx, dsy) <= handleR) return { idx: i, part: 'start' }
+    const dex = Math.abs(x - m.end[0]), dey = Math.abs(y - m.end[1])
+    if (Math.max(dex, dey) <= handleR) return { idx: i, part: 'end' }
+    // 再检测本体（起点或终点附近 bodyR 格内）
+    if (Math.max(dsx, dsy) <= bodyR || Math.max(dex, dey) <= bodyR) {
+      return { idx: i, part: 'move' }
+    }
+  }
+  return null
 }
 
 function drawStrokes_(ctx: CanvasRenderingContext2D) {
@@ -669,7 +880,27 @@ function drawAoe(ctx: CanvasRenderingContext2D, m: AoeMarker) {
   const [fill, stroke] = colors[m.kind] || colors.measure
   ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 2
 
-  if (m.kind === 'measure' || m.kind === 'sphere') {
+  if (m.kind === 'measure') {
+    // 测距：画 A→B 直线，标注切比雪夫距离（一格一步）
+    const cheby = Math.max(Math.abs(dx), Math.abs(dy))
+    const ex_px = ex * CELL + CELL / 2
+    const ey_px = ey * CELL + CELL / 2
+    ctx.strokeStyle = '#fa0'; ctx.lineWidth = 3
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex_px, ey_px); ctx.stroke()
+    // 端点圆圈
+    ctx.fillStyle = '#fa0'
+    ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(ex_px, ey_px, 4, 0, Math.PI * 2); ctx.fill()
+    // 距离文本（背景+前景）
+    const mid_x = (cx + ex_px) / 2, mid_y = (cy + ey_px) / 2 - 8
+    ctx.font = 'bold 14px sans-serif'
+    const txt = `${cheby}格`
+    const tw = ctx.measureText(txt).width
+    ctx.fillStyle = 'rgba(0,0,0,0.75)'
+    ctx.fillRect(mid_x - tw/2 - 4, mid_y - 12, tw + 8, 18)
+    ctx.fillStyle = '#fa0'
+    ctx.fillText(txt, mid_x - tw/2, mid_y + 2)
+  } else if (m.kind === 'sphere') {
     const radius = Math.max(0, dist) * CELL
     ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
     // 距离文本
@@ -777,6 +1008,19 @@ function onDown(e: MouseEvent) {
   // 测距/AOE 模板工具
   if (tool.value === 'measure' || tool.value === 'cone' ||
       tool.value === 'line' || tool.value === 'sphere') {
+    // 优先检查：是否点中了已有标记的手柄或本体
+    const hit = hitTestAoe(x, y)
+    if (hit) {
+      selectedAoeIdx.value = hit.idx
+      aoeDragMode.value = hit.part
+      if (hit.part === 'move') {
+        const m = aoeMarkers.value[hit.idx]
+        aoeDragOffset.value = [x - m.start[0], y - m.start[1]]
+      }
+      draw(); return
+    }
+    // 点空白处：取消选中并开始新测量
+    selectedAoeIdx.value = null
     measuring.value = true
     measureStart.value = [x, y]; measureEnd.value = [x, y]
     currentAoe.value = { kind: tool.value, start: [x, y], end: [x, y] }
@@ -856,6 +1100,24 @@ function onMouseMove(e: MouseEvent) {
   if (measuring.value) {
     measureEnd.value = [x, y]
     if (currentAoe.value) currentAoe.value.end = [x, y]
+    draw(); return
+  }
+
+  // AOE 标记拖拽调整
+  if (aoeDragMode.value !== 'none' && selectedAoeIdx.value !== null) {
+    const m = aoeMarkers.value[selectedAoeIdx.value]
+    if (!m) { aoeDragMode.value = 'none'; return }
+    if (aoeDragMode.value === 'start') {
+      m.start = [x, y]
+    } else if (aoeDragMode.value === 'end') {
+      m.end = [x, y]
+    } else if (aoeDragMode.value === 'move') {
+      const ndx = x - aoeDragOffset.value[0]
+      const ndy = y - aoeDragOffset.value[1]
+      const dx = ndx - m.start[0], dy = ndy - m.start[1]
+      m.start = [ndx, ndy]
+      m.end = [m.end[0] + dx, m.end[1] + dy]
+    }
     draw(); return
   }
 
@@ -956,12 +1218,15 @@ function manhattanPath(x1: number, y1: number, x2: number, y2: number): [number,
   return path
 }
 
+// preset 类画笔（障碍类，后端会展开为三维字段）
+const PRESET_BRUSHES = new Set(['wall', 'door', 'glass_wall', 'water_deep', 'lava', 'poison'])
+
 function paintCell(x: number, y: number) {
   const k = key(x, y)
   if (paintedCells.value.has(k)) return
   paintedCells.value.add(k)
   const brush = props.terrainBrush
-  // 特殊笔刷：黑暗/光源/清除元数据
+  // 环境笔刷：黑暗/光源/烟雾/清除
   if (brush === 'dark') {
     terrainPaintQueue.value.push({ x, y, type: 'meta', meta: { is_dark: true, darkness_strength: 0.7 } })
     return
@@ -970,11 +1235,15 @@ function paintCell(x: number, y: number) {
     terrainPaintQueue.value.push({ x, y, type: 'meta', meta: { light_radius: props.lightRadius ?? 3 } })
     return
   }
-  if (brush === 'clear_meta') {
-    terrainPaintQueue.value.push({ x, y, type: 'meta', meta: { is_dark: false, darkness_strength: 0.0, light_radius: 0 } })
+  if (brush === 'smoke') {
+    terrainPaintQueue.value.push({ x, y, type: 'meta', meta: { is_smoke: true, smoke_ttl: 3 } })
     return
   }
-  // 普通地形
+  if (brush === 'clear_meta') {
+    terrainPaintQueue.value.push({ x, y, type: 'meta', meta: { is_dark: false, darkness_strength: 0.0, light_radius: 0, is_smoke: false } })
+    return
+  }
+  // 地貌/障碍
   if (brush) {
     terrainPaintQueue.value.push({ x, y, type: brush })
   }
@@ -982,11 +1251,17 @@ function paintCell(x: number, y: number) {
 
 function flushTerrainPaint() {
   if (terrainPaintQueue.value.length === 0) return
-  // 统一使用 paint_cells 协议（替代 set_terrain + set_cell_meta，deprecated 但保留后端支持）
   const cells = terrainPaintQueue.value.map(p => {
     const cell: any = { x: p.x, y: p.y }
-    if (p.type !== 'meta') { cell.terrain = p.type }
-    if (p.meta) Object.assign(cell, p.meta)
+    if (p.type === 'meta') {
+      if (p.meta) Object.assign(cell, p.meta)
+    } else if (PRESET_BRUSHES.has(p.type)) {
+      // 障碍类：用 preset（后端展开为三维字段）
+      cell.preset = p.type
+    } else {
+      // 普通地貌：用 terrain（兼容后端 set_terrain）
+      cell.terrain = p.type
+    }
     return cell
   })
   window.dispatchEvent(new CustomEvent('ws-send', {
@@ -995,9 +1270,20 @@ function flushTerrainPaint() {
   terrainPaintQueue.value = []
 }
 
+// --- mouseleave：清理 hover 指示，避免画笔色框残留 ---
+function onCanvasLeave() {
+  hoveredCell.value = null
+  onMouseUp()
+}
+
 // --- mouseup ---
 function onMouseUp(e?: MouseEvent) {
   if (panning.value) { panning.value = false; return }
+  // AOE 拖拽结束
+  if (aoeDragMode.value !== 'none') {
+    aoeDragMode.value = 'none'
+    draw(); return
+  }
   if (measuring.value) {
     measuring.value = false
     // 保留 AOE 标记（若有效）
@@ -1127,11 +1413,44 @@ function zoomBy(delta: number, cx: number, cy: number) {
 }
 function resetView() { pan.value = { x: 0, y: 0 }; zoom.value = 1 }
 
-onMounted(draw)
-onUnmounted(() => { panning.value = false; dragging.value = false; painting.value = false })
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown)
+  draw()
+})
+onUnmounted(() => {
+  panning.value = false; dragging.value = false; painting.value = false
+  window.removeEventListener('keydown', onKeyDown)
+})
+
+/** 键盘：Delete 删除选中的 AOE 标记，Escape 取消选中 */
+function onKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (selectedAoeIdx.value !== null) {
+      aoeMarkers.value.splice(selectedAoeIdx.value, 1)
+      selectedAoeIdx.value = null
+      draw()
+      e.preventDefault()
+    }
+  } else if (e.key === 'Escape') {
+    selectedAoeIdx.value = null
+    aoeDragMode.value = 'none'
+    draw()
+  }
+}
 watch(() => props.room, draw, { deep: true })
 watch(selectedTokenId, draw)
 watch(() => [props.bgImage, props.bgOpacity, props.bgOffsetX, props.bgOffsetY, props.bgScaleX, props.bgScaleY], draw)
+
+// 笔刷切换时清理未提交的预览/队列，防止残留矩形框（事件竞争防御）
+watch(() => props.terrainBrush, () => {
+  if (terrainPaintStart.value) {
+    flushTerrainPaint()
+    terrainPaintStart.value = null
+    terrainPaintPreview.value = []
+    paintedCells.value.clear()
+    draw()
+  }
+})
 
 defineExpose({
   terrainPaintMode,

@@ -80,8 +80,8 @@ class TokenService:
             dy = abs(step[1] - cur[1])
             if max(dx, dy) != 1:
                 return MoveResult(success=False, reason=f"non-adjacent step: {cur}->{step}")
-            if self.map_svc.is_wall(step[0], step[1]):
-                return MoveResult(success=False, reason=f"wall at {step}")
+            if not self.map_svc.is_passable(step[0], step[1]):
+                return MoveResult(success=False, reason=f"impassable at {step}")
             for other_id, other in self.room.tokens.items():
                 if other_id == token_id or other.is_dead:
                     continue
@@ -162,7 +162,7 @@ class TokenService:
             x2, y2 = self.cfg.map_width, self.cfg.map_height
         for x in range(max(0, x1), min(self.cfg.map_width, x2)):
             for y in range(max(0, y1), min(self.cfg.map_height, y2)):
-                if self.map_svc.is_wall(x, y):
+                if not self.map_svc.is_passable(x, y):
                     continue
                 if (x, y) in occupied:
                     continue
@@ -179,7 +179,7 @@ class TokenService:
                 # 外圈 2 格
                 if min(x, y, w - 1 - x, h - 1 - y) >= 2:
                     continue
-                if self.map_svc.is_wall(x, y):
+                if not self.map_svc.is_passable(x, y):
                     continue
                 if (x, y) in occupied:
                     continue

@@ -130,20 +130,18 @@ class VisionService:
     # 内部
     # ------------------------------------------------------------------
     def _is_blocked(self, a: Tuple[int, int], b: Tuple[int, int]) -> bool:
-        """视线被墙或烟雾阻挡。"""
+        """视线被墙或烟雾阻挡（is_vision_blocking 内含烟雾判断，ADR-4）。"""
         cells = bresenham_line(a, b)
         for (x, y) in cells[1:-1]:
-            if self.map_svc.is_wall(x, y):
-                return True
-            if self.map_svc.is_smoke(x, y):
+            if self.map_svc.is_vision_blocking(x, y):
                 return True
         return False
 
     def _is_wall_blocked(self, a: Tuple[int, int], b: Tuple[int, int]) -> bool:
-        """仅墙阻挡（声音穿烟雾/黑暗）。"""
+        """仅实体墙阻挡（声音穿烟雾/玻璃/水；光照同理）。"""
         cells = bresenham_line(a, b)
         for (x, y) in cells[1:-1]:
-            if self.map_svc.is_wall(x, y):
+            if self.map_svc.is_sound_blocking(x, y):
                 return True
         return False
 

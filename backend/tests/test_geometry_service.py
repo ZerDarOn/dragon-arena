@@ -48,5 +48,6 @@ def test_has_wall_between_clear():
 
 def test_has_wall_between_blocked():
     m = GameMap(width=10, height=10)
-    m.terrain[0][3].type = "wall"
+    from app.services.map_service import MapService
+    MapService(m).set_terrain(3, 0, "wall")
     assert has_wall_between(m, (0, 0), (5, 0)) is True

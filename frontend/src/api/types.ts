@@ -25,13 +25,23 @@ export interface CharacterSheet {
 // ---- Map ----
 export interface TerrainCell {
   x: number; y: number
-  type: 'flat' | 'wall' | 'grass' | 'water' | 'high'
+  // 维度1: 地貌（纯视觉）
+  terrain_type: string  // flat/grass/dirt/stone/sand/water/lava/ice/wood/glass/poison
+  // 维度2: 碰撞（唯一真相）
+  blocks_movement: boolean
+  blocks_vision: boolean
+  // 渲染标签（不影响碰撞）
+  wall_render?: string | null  // solid/door/glass/water_deep/lava
+  door_open?: boolean
+  // 维度3: 环境
   height: number
   smoke_ttl: number | null
   is_smoke: boolean
   is_dark: boolean
   darkness_strength: number
   light_radius: number
+  // 迁移期保留
+  type?: string | null
 }
 export interface GameMap {
   width: number; height: number

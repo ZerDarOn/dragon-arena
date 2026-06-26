@@ -446,12 +446,26 @@ async def handle_ws_connection(websocket: WebSocket, room_id: str, user_id: str,
                             gs.snapshot_storage.save(gs.room.id, gs.room.model_dump_json())
                     await _broadcast_state(gs, room_id)
                 elif t == "paint_cells":
-                    # 统一地形+元数据绘制（替代 set_terrain + set_cell_meta）
+                    # 统一地形+元数据绘制（支持 preset + 直接字段）
                     async with gs.lock:
                         for cell in p.get("cells", []):
                             cx, cy = int(cell["x"]), int(cell["y"])
-                            if "terrain" in cell:
+                            # preset 模式：展开为三维字段
+                            preset = cell.get("preset")
+                            if preset:
+                                gs.map_svc.paint_cell(cx, cy, preset=preset)
+                            # terrain 字段（兼容旧前端）
+                            elif "terrain" in cell:
                                 gs.map_svc.set_terrain(cx, cy, cell["terrain"])
+                            # 直接字段模式
+                            direct_fields = {}
+                            for fld in ("terrain_type", "blocks_movement", "blocks_vision",
+                                        "wall_render", "door_open", "is_smoke", "height"):
+                                if fld in cell:
+                                    direct_fields[fld] = cell[fld]
+                            if direct_fields:
+                                gs.map_svc.paint_cell(cx, cy, **direct_fields)
+                            # 元数据
                             if "is_dark" in cell:
                                 gs.map_svc.set_dark(cx, cy, bool(cell["is_dark"]))
                             if "darkness_strength" in cell:
